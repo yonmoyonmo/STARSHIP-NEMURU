@@ -1,32 +1,11 @@
-//
-//  STARSHIP_NEMURUApp.swift
-//  STARSHIP NEMURU
-//
-//  Created by yowenomo on 10/21/26.
-//
-
 import SwiftUI
-import SwiftData
 
 @main
 struct STARSHIP_NEMURUApp: App {
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            Item.self,
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-
-        do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
-        }
-    }()
-
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            StudioLaunchView()
+                .preferredColorScheme(.dark)
         }
-        .modelContainer(sharedModelContainer)
     }
 }
