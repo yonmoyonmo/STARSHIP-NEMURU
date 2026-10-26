@@ -13,6 +13,7 @@ star_colors = (root / 'STARSHIP NEMURU/Flight/StarColors.swift').read_text()
 thruster_response = (root / 'STARSHIP NEMURU/Flight/ThrusterResponse.swift').read_text()
 store = (root / 'STARSHIP NEMURU/Voyage/VoyageStore.swift').read_text()
 log = (root / 'STARSHIP NEMURU/Voyage/VoyageLog.swift').read_text()
+discovery = (root / 'STARSHIP NEMURU/Flight/QuietDiscovery.swift').read_text() + '\n' + (root / 'STARSHIP NEMURU/Flight/QuietActivity.swift').read_text()
 flight = (root / 'STARSHIP NEMURU/Flight/FlightSession.swift').read_text()
 voice = (root / 'STARSHIP NEMURU/Audio/VoyageAudio.swift').read_text().split('@MainActor\nfinal class VoyageAudio')[0].replace('import MediaPlayer', '')
 checks = r'''
@@ -25,6 +26,7 @@ checks = r'''
     func pauseByUser() { stop(); needsUserResume = true }
     private(set) var touchdownCount = 0
     func playTouchdown(volume: Float) { touchdownCount += 1 }
+    func setBeacon(strength: Float, pan: Float, volume: Float, elapsed: Float) {}
     func setLevels(engine: Float, signal: Float, ambience: Float, speed: Float, rest: Float, approach: Float, elapsed: Float = 0.15) {}
 }
 
@@ -45,6 +47,56 @@ checks = r'''
         preconditionFailure("No clear test corridor")
     }
     @MainActor static func main() {
+        var shape = QuietConstellation(world: .home)
+        let observingPosition = UniversePosition()
+        let observingDirection = simd_normalize(shape.relative(to: observingPosition))
+        for _ in 0..<120 { precondition(!shape.observe(dt: 1 / 60, position: observingPosition, forward: observingDirection, allowed: true)) }
+        let heldFocus = shape.focusSeconds
+        for _ in 0..<240 { _ = shape.observe(dt: 1 / 60, position: observingPosition, forward: observingDirection, allowed: false) }
+        precondition(shape.focusSeconds == heldFocus, "Paused/background observation cannot solve the leaf")
+        for _ in 0..<240 { _ = shape.observe(dt: 1 / 60, position: observingPosition, forward: -observingDirection, allowed: true) }
+        precondition(shape.focusSeconds == heldFocus, "Looking away neither solves nor penalizes the puzzle")
+        for _ in 0..<90 { _ = shape.observe(dt: 1 / 60, position: observingPosition, forward: observingDirection, allowed: true) }
+        precondition(shape.focusSeconds == 3)
+        var atmospheres = Set<Int>()
+        for index: Int64 in 1...100 {
+            if let body = Universe.generate(SectorID(x: index, y: 0, z: 0)).planet {
+                let sky = WorldAtmosphere.forWorld(body)
+                precondition(sky == WorldAtmosphere.forWorld(body))
+                atmospheres.insert(sky.rawValue)
+            }
+        }
+        precondition(atmospheres.count == 4)
+        print("PASS forgiving constellation focus/pause/resume and four deterministic atmospheres")
+        let signalModel = QuietActivity(world: .home, kind: .signal)
+        var signalFocus = signalModel
+        var signalPosition = UniversePosition(sector: signalModel.world.sector)
+        signalPosition.advance(signalModel.centerOffset + SIMD3<Float>(0,0,240))
+        for _ in 0..<300 { _ = signalFocus.listen(dt: 1 / 60, position: signalPosition, forward: [0,0,1], allowed: true) }
+        precondition(signalFocus.focus == 0)
+        for _ in 0..<300 { _ = signalFocus.listen(dt: 1 / 60, position: signalPosition, forward: [0,0,-1], allowed: false) }
+        precondition(signalFocus.focus == 0)
+        for _ in 0..<300 { _ = signalFocus.listen(dt: 1 / 60, position: signalPosition, forward: [0,0,-1], allowed: true) }
+        precondition(signalFocus.focus == 4)
+        var sequences = Set<String>()
+        for index: Int64 in 1...100 {
+            if let body = Universe.generate(SectorID(x: index, y: 0, z: 0)).planet {
+                let pattern = QuietActivity(world: body, kind: .pattern)
+                precondition(pattern.accepts(pattern.answer))
+                precondition(!pattern.accepts((pattern.answer + 1) % 3))
+                precondition(pattern.sequence == QuietActivity(world: body, kind: .pattern).sequence)
+                sequences.insert(pattern.sequence)
+            }
+        }
+        precondition(sequences.count >= 3)
+        var beaconPeak: Float = 0
+        for frame in 0..<96000 {
+            let sample = BeaconSound.sample(at: Double(frame) / 48000)
+            precondition(sample.isFinite && abs(sample) < 0.05)
+            beaconPeak = max(beaconPeak, abs(sample))
+        }
+        precondition(beaconPeak > 0.02 && abs(BeaconSound.sample(at: 2)) < 0.000001)
+        print("PASS directional signal focus/pause, seeded repeating-light answers and quiet seamless beacon waveform")
         var origin = UniversePosition()
         origin.advance(PlanetDefinition.home.offset)
         let homeAddress = VoyagePosition(origin)
@@ -94,12 +146,12 @@ checks = r'''
         precondition(StarColors.cluster(seed: 18) != StarColors.cluster(seed: 19))
         print("PASS ten muted planet families, seeded color variation, six weighted star tints and cluster families")
         var drive = ThrusterResponse()
-        for _ in 0..<120 { drive.update(speed: 24, acceleration: 0, braking: false, liftingOff: false, resting: false, dt: 1 / 60) }
+        for _ in 0..<120 { drive.update(speed: FlightTuning.cruiseSpeed, acceleration: 0, braking: false, liftingOff: false, resting: false, dt: 1 / 60) }
         let cruisingGlow = drive.brightness
         precondition(cruisingGlow > 0.7 && cruisingGlow < 0.8)
-        for _ in 0..<120 { drive.update(speed: 24, acceleration: 8, braking: false, liftingOff: false, resting: false, dt: 1 / 60) }
+        for _ in 0..<120 { drive.update(speed: FlightTuning.cruiseSpeed, acceleration: 8, braking: false, liftingOff: false, resting: false, dt: 1 / 60) }
         precondition(drive.brightness > cruisingGlow && drive.brightness > 0.95)
-        for _ in 0..<60 { drive.update(speed: 24, acceleration: -8, braking: true, liftingOff: false, resting: false, dt: 1 / 60) }
+        for _ in 0..<60 { drive.update(speed: FlightTuning.cruiseSpeed, acceleration: -8, braking: true, liftingOff: false, resting: false, dt: 1 / 60) }
         precondition(drive.brightness < 0.13, "Braking must dim the drives before the ship has stopped")
         for _ in 0..<120 { drive.update(speed: 0, acceleration: 0, braking: false, liftingOff: false, resting: true, dt: 1 / 60) }
         precondition(drive.brightness == 0, "Stopped/resting drives must settle to dark")
@@ -113,14 +165,20 @@ checks = r'''
         let flight = clearFlight()
         flight.touch(at: .zero, size: CGSize(width: 400, height: 800))
         advance(flight, 8)
-        precondition(abs(flight.velocity - 2) < 0.001, "Hold must decelerate to a positive minimum")
+        precondition(flight.velocity == 0, "Holding must brake to an exact full stop")
+        let stoppedPosition = flight.universe.position
+        advance(flight, 3)
+        precondition(flight.universe.position == stoppedPosition, "Holding after a full stop must not drift")
+        flight.touch(at: CGPoint(x: 5, y: 0), size: CGSize(width: 400, height: 800))
+        advance(flight, 1)
+        precondition(flight.universe.position == stoppedPosition && flight.velocity == 0, "Turning while held must keep the ship in place")
         flight.release()
         advance(flight, 24)
-        precondition(abs(flight.velocity - 24) < 0.01, "Release must accelerate back to cruise")
+        precondition(abs(flight.velocity - 16) < 0.01, "Release must accelerate back to cruise")
         let fastArchive = flight.makeArchive()
         try! fastArchive.validate()
         let fastRoundTrip = try! JSONDecoder().decode(VoyageArchive.self, from: JSONEncoder().encode(fastArchive))
-        precondition(fastRoundTrip.velocity > 23.9, "Doubled cruise speed must survive serialization")
+        precondition(fastRoundTrip.velocity > 15.9 && fastRoundTrip.velocity <= 16, "16-unit cruise must survive serialization")
         var tooFast = fastArchive
         tooFast.velocity = 25
         do { try tooFast.validate(); preconditionFailure("Out-of-range speeds must still be rejected") } catch {}
@@ -140,7 +198,7 @@ checks = r'''
         advance(releasedTurn, 1)
         let residual = acos(min(1, max(-1, simd_dot(settledForward, releasedTurn.forward))))
         precondition(residual < 0.002, "Residual steering must settle promptly after release")
-        print("PASS 24-unit cruise/save, precise small drags and short release settling")
+        print("PASS 16-unit cruise/save, precise small drags and short release settling")
 
         let turn = FlightSession()
         turn.touch(at: .zero, size: CGSize(width: 400, height: 800))
@@ -186,7 +244,7 @@ checks = r'''
         print("PASS near-planet stop, no automatic turn, stable hold and pilot-controlled departure")
 
         let landing = FlightSession()
-        advance(landing, 6)
+        advance(landing, 9)
         precondition(landing.canLand, "The initial planet must be reachable")
         precondition(landing.approachAmount > 0, "Approaching a visible planet must affect its atmosphere")
         landing.landOrLaunch()
@@ -319,6 +377,77 @@ checks = r'''
 
         let savedDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("nemuru-save-check-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: savedDirectory) }
+        let discoveryStore = VoyageStore(directory: savedDirectory.appendingPathComponent("discovery"))
+        var observationArchive = FlightSession().makeArchive()
+        let aimed = simd_quatf(from: SIMD3<Float>(0,0,-1), to: observingDirection).vector
+        observationArchive.heading = [aimed.x, aimed.y, aimed.z, aimed.w]
+        observationArchive.velocity = 0
+        discoveryStore.save(observationArchive); discoveryStore.flush()
+        let observationFlight = FlightSession(store: discoveryStore)
+        observationFlight.accessibleSlow = true
+        advance(observationFlight, 5)
+        precondition(observationFlight.log.record(.zero)?.constellationFoundAt != nil)
+        precondition(observationFlight.destination == .zero)
+        let foundLeaf = observationFlight.log.record(.zero)!.constellationFoundAt
+        observationFlight.save(); discoveryStore.flush()
+        let resumedObservation = FlightSession(store: discoveryStore)
+        advance(resumedObservation, 5)
+        precondition(resumedObservation.log.record(.zero)?.constellationFoundAt == foundLeaf)
+        precondition(resumedObservation.destination == .zero)
+        observationFlight.shutdown(); resumedObservation.shutdown()
+        print("PASS end-to-end leaf discovery, automatic course, one-time record and relaunch restore")
+        for kind in [QuietActivity.Kind.signal, .pattern] {
+            let body = Universe().planets.first { QuietActivity.kind(for: $0) == kind }!
+            let event = QuietActivity(world: body, kind: kind)
+            var point = UniversePosition(sector: body.sector)
+            point.advance(event.centerOffset + SIMD3<Float>(0,0,240))
+            let localWorld = Universe(position: point)
+            let fixture = VoyageLog()
+            for other in localWorld.planets where other.sector != body.sector {
+                fixture.findConstellation(on: other, at: Date())
+                fixture.findActivity(QuietActivity(world: other, kind: .signal), at: Date())
+                fixture.findActivity(QuietActivity(world: other, kind: .pattern), at: Date())
+            }
+            var archive = FlightSession(universe: localWorld).makeArchive()
+            archive.heading = [0,0,0,1]; archive.velocity = 0; archive.journal = fixture.snapshot
+            let activityStore = VoyageStore(directory: savedDirectory.appendingPathComponent(kind == .signal ? "signal" : "pattern"))
+            activityStore.save(archive); activityStore.flush()
+            let player = FlightSession(store: activityStore)
+            player.accessibleSlow = true
+            advance(player, 1)
+            precondition(player.activity?.world.sector == body.sector && player.activity?.kind == kind)
+            if kind == .pattern {
+                precondition(player.patternAvailable)
+                player.logPresented = true
+                player.chooseLight(event.answer)
+                precondition(player.log.record(body.sector)?.patternFoundAt == nil)
+                player.logPresented = false
+                player.chooseLight((event.answer + 1) % 3)
+                advance(player, 0.5)
+                precondition(player.activity != nil && player.discoveryHint?.contains("Look once more") == true)
+                player.chooseLight(event.answer)
+            } else { advance(player, 5) }
+            precondition(player.activity == nil && player.destination == body.sector)
+            let stamp = kind == .signal ? player.log.record(body.sector)?.signalFoundAt : player.log.record(body.sector)?.patternFoundAt
+            precondition(stamp != nil)
+            player.save(); activityStore.flush()
+            let resumed = FlightSession(store: activityStore)
+            let restoredStamp = kind == .signal ? resumed.log.record(body.sector)?.signalFoundAt : resumed.log.record(body.sector)?.patternFoundAt
+            precondition(restoredStamp == stamp && resumed.destination == body.sector)
+            player.shutdown(); resumed.shutdown()
+        }
+        print("PASS signal and pattern end-to-end discovery/course/save/relaunch; wrong answer and sheet guards")
+        var legacyFast = fastArchive
+        legacyFast.velocity = 24
+        legacyFast.approachSpeed = 24
+        let speedStore = VoyageStore(directory: savedDirectory.appendingPathComponent("legacy-speed"))
+        speedStore.save(legacyFast); speedStore.flush()
+        let slowerRestore = FlightSession(store: speedStore)
+        precondition(slowerRestore.storageMessage == nil && slowerRestore.velocity == 16)
+        precondition(slowerRestore.makeArchive().approachSpeed == 16)
+        precondition(slowerRestore.universe.position == legacyFast.position)
+        slowerRestore.shutdown()
+        print("PASS previous 24-unit saves restore intact with speed capped at 16")
         let voyageStore = VoyageStore(directory: savedDirectory)
         let persisted = FlightSession(store: voyageStore)
         advance(persisted, 10)
@@ -334,6 +463,15 @@ checks = r'''
         persisted.backgroundSound = false
         persisted.save()
         voyageStore.flush()
+        let keptID = persisted.targetPlanet.sector
+        persisted.nameWorld(keptID, name: "  나의 새벽  ")
+        persisted.rememberWorld(keptID, favorite: true)
+        persisted.setCourse(to: keptID)
+        persisted.save()
+        voyageStore.flush()
+        precondition(persisted.log.record(keptID)?.displayName == "나의 새벽")
+        precondition(persisted.log.favorites.contains { $0.id == keptID })
+        precondition(persisted.navigationHint == "You are here")
         let savedPosition = persisted.universe.position
         let savedJournal = persisted.log.snapshot
         precondition(savedJournal.worlds.first { $0.id == persisted.targetPlanet.sector }?.position == persisted.targetPlanet.position)
@@ -345,9 +483,15 @@ checks = r'''
         oldJournal["worlds"] = (oldJournal["worlds"] as! [[String: Any]]).map { entry in
             var legacy = entry
             legacy.removeValue(forKey: "position")
+            legacy.removeValue(forKey: "nickname")
+            legacy.removeValue(forKey: "favorite")
+            legacy.removeValue(forKey: "constellationFoundAt")
+            legacy.removeValue(forKey: "signalFoundAt")
+            legacy.removeValue(forKey: "patternFoundAt")
             return legacy
         }
         oldArchive["journal"] = oldJournal
+        oldArchive.removeValue(forKey: "destination")
         let legacyArchive = try! JSONDecoder().decode(VoyageArchive.self, from: JSONSerialization.data(withJSONObject: oldArchive))
         try! legacyArchive.validate()
         let migratedLog = VoyageLog(legacyArchive.journal)
@@ -366,6 +510,9 @@ checks = r'''
         precondition(holdRestored.isProximityStopped && holdRestored.universe.position == heldArchive)
         print("PASS planet center persistence, legacy journal location backfill, stopped-voyage restoration")
         let restored = FlightSession(store: VoyageStore(directory: savedDirectory))
+        precondition(restored.destination == keptID)
+        precondition(restored.log.record(keptID)?.nickname == "나의 새벽" && restored.log.record(keptID)?.favorite == true)
+        print("PASS personal names, kept places and return course persisted/restored")
         precondition(restored.phase == .landed && restored.groundVisible)
         precondition(restored.targetPlanet == persisted.targetPlanet)
         precondition(restored.universe.position == savedPosition)
@@ -498,7 +645,7 @@ checks = r'''
 with tempfile.TemporaryDirectory(prefix='nemuru-check-') as temporary:
     path = Path(temporary)
     source = path / 'Checks.swift'
-    source.write_text(tuning + '\n' + universe + '\n' + voyage_position + '\n' + sky_motion + '\n' + star_colors + '\n' + thruster_response + '\n' + store + '\n' + log + '\n' + flight + '\n' + voice + '\n' + checks)
+    source.write_text(tuning + '\n' + universe + '\n' + voyage_position + '\n' + sky_motion + '\n' + star_colors + '\n' + thruster_response + '\n' + store + '\n' + discovery + '\n' + log + '\n' + flight + '\n' + voice + '\n' + checks)
     executable = path / 'checks'
     subprocess.run(['xcrun', '--sdk', 'macosx', 'swiftc', '-O', '-parse-as-library',
                     '-default-isolation', 'MainActor', '-module-cache-path', str(path / 'modules'), str(source), '-o', str(executable)], check=True)

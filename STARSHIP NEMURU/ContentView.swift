@@ -4,6 +4,7 @@ struct ContentView: View {
     @StateObject private var flight = FlightSession(store: VoyageStore.applicationStore())
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
+    @State private var placeToName: WorldRecord?
     @AppStorage("showVoyagePosition") private var showVoyagePosition = false
 
     var body: some View {
@@ -32,7 +33,7 @@ struct ContentView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("NEMURU").font(.system(size: 18, weight: .medium, design: .monospaced)).tracking(5)
                             Text(flight.groundVisible ? "RESTING · \(flight.planetName)" : "QUIET VOYAGE")
-                                .font(.system(.caption2, design: .monospaced)).tracking(2).foregroundStyle(.white.opacity(0.5))
+                                .font(.system(.caption2, design: .monospaced)).tracking(2).lineLimit(1).minimumScaleFactor(0.7).foregroundStyle(.white.opacity(0.5))
                         }
                         Spacer()
                         Button {
@@ -67,6 +68,42 @@ struct ContentView: View {
                     }
                     Spacer()
                     VStack(alignment: .leading, spacing: 14) {
+                        if let hint = flight.discoveryHint, flight.phase == .flying {
+                            Text(hint).font(.caption).foregroundStyle(.white.opacity(0.6))
+                        }
+                        if flight.patternAvailable && flight.phase == .flying {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(flight.patternSequence).font(.system(.body, design: .monospaced)).accessibilityLabel("Repeating lights: " + flight.patternSequence)
+                                HStack(spacing: 14) {
+                                    ForEach(0..<3) { choice in
+                                        Button { flight.chooseLight(choice) } label: {
+                                            Text(QuietActivity.symbols[choice]).font(.title2).frame(width: 52, height: 48)
+                                                .background(.white.opacity(0.07), in: Capsule())
+                                        }.accessibilityLabel(["Circle", "Triangle", "Diamond"][choice] + " comes next")
+                                    }
+                                }
+                            }
+                        }
+                        if flight.signalClarity > 0.05 && flight.phase == .flying {
+                            Text(flight.signalClarity > 0.6 ? "SIGNAL · CLEAR" : flight.signalClarity > 0.3 ? "SIGNAL · NEARER" : "SIGNAL · FAINT")
+                                .font(.system(.caption2, design: .monospaced)).foregroundStyle(.white.opacity(0.55))
+                        }
+                        if let name = flight.destinationName {
+                            HStack(alignment: .top) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("TOWARD · " + name).font(.system(.caption, design: .monospaced))
+                                    Text(flight.navigationHint + " · " + String(format: "%.2f ly", (flight.destinationDistance ?? 0) / 1000))
+                                        .font(.caption2).foregroundStyle(.white.opacity(0.55))
+                                }
+                                Spacer()
+                                Button { flight.setCourse(to: nil) } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
+                                    .accessibilityLabel("Let the course go")
+                            }
+                        }
+                        if flight.phase == .landed {
+                            Button("Name or keep this place") { placeToName = flight.log.record(flight.targetPlanet.sector) }
+                                .font(.caption).frame(minHeight: 44)
+                        }
                         if flight.canLand || flight.phase == .landed {
                             Button(action: flight.landOrLaunch) {
                                 HStack(spacing: 12) {
@@ -82,7 +119,7 @@ struct ContentView: View {
                             Text(status).tracking(2)
                             Spacer()
                             if flight.phase == .flying {
-                                Text(String(format: "%02.0f  /  %@", flight.speed, flight.isProximityStopped ? "HOLD" : "DRIFT")).tracking(1)
+                                Text(String(format: "%02.0f  /  %@", flight.speed, flight.speed < 0.01 ? "HOLD" : "DRIFT")).tracking(1)
                             }
                         }.font(.system(.caption2, design: .monospaced)).foregroundStyle(.white.opacity(0.55))
                         Text(instruction)
@@ -107,7 +144,14 @@ struct ContentView: View {
             soundSettings.presentationDetents([.large]).presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $flight.logPresented, onDismiss: { flight.release() }) {
-            VoyageLogView(log: flight.log, storageMessage: flight.storageMessage)
+            VoyageLogView(flight: flight).tint(Color(red: 0.6, green: 0.78, blue: 0.72))
+        }
+        .sheet(item: $placeToName, onDismiss: { flight.save() }) { record in
+            NavigationStack {
+                WorldPlaceView(flight: flight, id: record.id)
+                    .tint(Color(red: 0.6, green: 0.78, blue: 0.72))
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Close") { placeToName = nil } } }
+            }
         }
         .onAppear { flight.reduceMotion = reduceMotion; flight.setActive(true) }
         .onDisappear { flight.shutdown() }
@@ -123,7 +167,7 @@ struct ContentView: View {
 
     private var instruction: String {
         switch flight.phase {
-        case .flying: return flight.isProximityStopped ? "Turn away to drift · Land to rest" : "Hold to slow · Drag to turn · Release to drift"
+        case .flying: return flight.isProximityStopped ? "Turn away to drift · Land to rest" : flight.speed < 0.01 ? "Release to drift · Drag to turn in place" : "Hold to stop · Drag to turn · Release to drift"
         case .landing: return "Let Nemuru settle."
         case .landed: return "Stay a little. There is nothing to do."
         case .launching: return "The voyage continues."
@@ -132,7 +176,7 @@ struct ContentView: View {
 
     private var status: String {
         switch flight.phase {
-        case .flying: return flight.isProximityStopped ? "HOLDING POSITION" : (flight.canLand ? "\(flight.planetName) · WITHIN REACH" : "FREE FLIGHT")
+        case .flying: return flight.speed < 0.01 ? "HOLDING POSITION" : (flight.canLand ? "\(flight.planetName) · WITHIN REACH" : "FREE FLIGHT")
         case .landing: return "SETTLING DOWN"
         case .landed: return "\(flight.planetName) · A QUIET PLACE"
         case .launching: return "BACK INTO THE NIGHT"

@@ -34,6 +34,13 @@ struct SpaceView: UIViewRepresentable {
         private let thrusters = ShipThrusters()
         private var thrusterResponse = ThrusterResponse()
         private let scenery = UniverseScene()
+        private let constellationScene = ConstellationScene()
+        private var activityScene: ActivityScene?
+        private weak var renderView: ARView?
+        private var atmosphere = WorldAtmosphere.airless
+        private let voyageScenery = VoyageScenery()
+        private var aurora: RestingAurora?
+        private var dawn: RestingDawn?
         private let brakingHaptics = BrakingHaptics()
         private var groundPlanet: PlanetDefinition?
         private var restingSky = Entity()
@@ -53,6 +60,7 @@ struct SpaceView: UIViewRepresentable {
         private var wasActive = true
         private var preferredFPS: Float = 60
         #if DEBUG
+        private var aimedHorizonPreview = false
         private let traceRestingSky = ProcessInfo.processInfo.arguments.contains("--trace-resting-sky")
         private var skyTraceClock: Float = 0
         private var skyTraceFrames = 0
@@ -61,13 +69,14 @@ struct SpaceView: UIViewRepresentable {
         init(session: FlightSession) { self.session = session }
 
         func install(in view: ARView) {
+            renderView = view
             view.scene.addAnchor(anchor)
             anchor.addChild(space)
             anchor.addChild(ground)
             anchor.addChild(camera)
             camera.camera.fieldOfViewInDegrees = 58
             camera.camera.near = 0.1
-            camera.camera.far = 2000
+            camera.camera.far = 5000
             camera.position = [0, 5.5, 22]
             camera.orientation = simd_quatf(angle: -0.14, axis: [1, 0, 0])
             do {
@@ -76,9 +85,16 @@ struct SpaceView: UIViewRepresentable {
                 shipPivot.addChild(ship)
                 anchor.addChild(shipPivot)
                 space.addChild(scenery.root)
+                space.addChild(constellationScene.root)
+                space.addChild(constellationScene.navigationRoot)
+                let activities = try ActivityScene()
+                activityScene = activities
+                space.addChild(activities.root)
+                space.addChild(voyageScenery.root)
                 try prepareGround()
                 createStars()
                 scenery.update(session.universe, dt: 0)
+                voyageScenery.update(session.universe, dt: 0, reduceMotion: session.reduceMotion)
                 applySceneMode()
                 ready = true
             } catch {
@@ -95,13 +111,22 @@ struct SpaceView: UIViewRepresentable {
             let definition = session.targetPlanet
             let terrain = try PolygonFactory.terrain(definition)
             terrain.name = "terrain"
-            let sky = try PolygonFactory.restingSky(seed: definition.seed)
+            atmosphere = WorldAtmosphere.forWorld(definition)
+            let sky = try PolygonFactory.restingSky(seed: definition.seed, starVisibility: atmosphere.starVisibility)
+            let nextAurora = try RestingAurora(seed: definition.seed)
+            let nextDawn = try RestingDawn(seed: definition.seed)
             sky.name = "resting-sky"
             restingSkyMotion = RestingSkyMotion(seed: definition.seed, elapsed: session.log.restingTime(on: definition))
             sky.orientation = restingSkyMotion.orientation
             for child in Array(ground.children) { child.removeFromParent() }
             ground.addChild(terrain)
             ground.addChild(sky)
+            nextAurora.root.isEnabled = atmosphere != .airless
+            ground.addChild(nextAurora.root)
+            aurora = nextAurora
+            nextDawn.root.isEnabled = atmosphere != .airless
+            ground.addChild(nextDawn.root)
+            dawn = nextDawn
             restingSky = sky
             groundPlanet = definition
         }
@@ -159,6 +184,8 @@ struct SpaceView: UIViewRepresentable {
             }
             if showingGround {
                 restingSkyMotion.advance(dt, reduceMotion: session.reduceMotion)
+                aurora?.update(dt: dt, reduceMotion: session.reduceMotion)
+                dawn?.update(dt: dt, reduceMotion: session.reduceMotion)
                 restingSky.orientation = restingSkyMotion.orientation
                 #if DEBUG
                 if traceRestingSky {
@@ -179,6 +206,17 @@ struct SpaceView: UIViewRepresentable {
                 let bank = simd_quatf(angle: session.reduceMotion ? 0 : -session.steering.x * 0.35, axis: [0, 0, 1])
                 ship.orientation = simd_slerp(ship.orientation, bank, 1 - exp(-dt * 4))
                 scenery.update(session.universe, dt: dt)
+                constellationScene.update(session.constellation, position: session.universe.position, forward: session.forward, dt: dt)
+                constellationScene.guide(to: session.destinationWorld, position: session.universe.position)
+                activityScene?.update(session.activity, position: session.universe.position, dt: dt, reduceMotion: session.reduceMotion)
+                #if DEBUG
+                if !aimedHorizonPreview, ProcessInfo.processInfo.arguments.contains("--preview-horizon"),
+                   let distant = scenery.root.children.first(where: { simd_length($0.position) > 2400 }) {
+                    session.previewDistantPlanet(at: distant.position)
+                    aimedHorizonPreview = true
+                }
+                #endif
+                voyageScenery.update(session.universe, dt: dt, reduceMotion: session.reduceMotion, cameraPosition: camera.position)
                 let follow = 1 - exp(-dt * 3)
                 camera.position += (session.heading.act([0, 5.5, 22]) - camera.position) * follow
                 camera.orientation = simd_slerp(camera.orientation,
@@ -207,6 +245,8 @@ struct SpaceView: UIViewRepresentable {
 
         private func applySceneMode() {
             showingGround = session.groundVisible
+            let background = showingGround ? atmosphere.color : WorldAtmosphere.airless.color
+            renderView?.environment.background = .color(PolygonFactory.uiColor(background))
             ground.isEnabled = showingGround
             space.isEnabled = !showingGround
             for entry in stars {

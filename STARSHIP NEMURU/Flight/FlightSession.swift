@@ -20,6 +20,15 @@ final class FlightSession: ObservableObject {
     @Published var logPresented = false
     @Published private(set) var soundPlaying = false
     @Published private(set) var storageMessage: String?
+    @Published private(set) var destination: SectorID?
+    @Published private(set) var discoveryHint: String?
+    private(set) var constellation: QuietConstellation?
+    private(set) var activity: QuietActivity?
+    @Published private(set) var patternAvailable = false
+    @Published private(set) var signalClarity: Float = 0
+    private var encounterClock: Float = 1
+    private var gentleRetry: Float = 0
+    private var quietInterval: Float = 0
     var reduceMotion = false
     var accessibleSlow = false
     @Published private(set) var audioError: String?
@@ -55,7 +64,17 @@ final class FlightSession: ObservableObject {
 
     init(universe initialUniverse: Universe? = nil, store requestedStore: VoyageStore? = nil) {
         #if DEBUG
-        let preview = ProcessInfo.processInfo.arguments.contains("--preview-landing")
+        let previewSky = WorldAtmosphere.allCases.first {
+            ProcessInfo.processInfo.arguments.contains("--preview-sky-" + String($0.rawValue))
+        }
+        let preview = previewSky != nil || ProcessInfo.processInfo.arguments.contains("--preview-signal")
+            || ProcessInfo.processInfo.arguments.contains("--preview-pattern") || ProcessInfo.processInfo.arguments.contains("--preview-discovery")
+            || ProcessInfo.processInfo.arguments.contains("--preview-horizon")
+            || ProcessInfo.processInfo.arguments.contains("--preview-nebula")
+            || ProcessInfo.processInfo.arguments.contains("--preview-ice")
+            || ProcessInfo.processInfo.arguments.contains("--preview-ripple")
+            || ProcessInfo.processInfo.arguments.contains("--preview-scenery")
+            || ProcessInfo.processInfo.arguments.contains("--preview-landing")
             || ProcessInfo.processInfo.arguments.contains("--preview-universe")
             || ProcessInfo.processInfo.arguments.contains("--preview-log")
             || ProcessInfo.processInfo.arguments.contains("--preview-settings")
@@ -66,14 +85,15 @@ final class FlightSession: ObservableObject {
         let report = store?.load()
         let archive = initialUniverse == nil ? report?.archive : nil
         log = VoyageLog(archive?.journal ?? JournalSnapshot())
+        destination = archive?.destination
         universe = initialUniverse ?? Universe(position: archive?.position)
         if let archive {
             heading = simd_normalize(simd_quatf(vector: SIMD4(archive.heading[0], archive.heading[1], archive.heading[2], archive.heading[3])))
-            velocity = archive.velocity
+            velocity = min(FlightTuning.cruiseSpeed, archive.velocity)
             phase = Phase(rawValue: archive.phase) ?? .flying
             targetPlanet = Universe.generate(archive.target).planet ?? .home
             transitionProgress = archive.transition
-            approachSpeed = archive.approachSpeed
+            approachSpeed = min(FlightTuning.cruiseSpeed, archive.approachSpeed)
             touchdownPlayed = archive.touchdownPlayed
             groundVisible = phase == .landed || (phase == .landing && transitionProgress >= 0.5)
                 || (phase == .launching && transitionProgress < 0.5)
@@ -87,7 +107,7 @@ final class FlightSession: ObservableObject {
         }
         storageMessage = report?.message
         if phase == .flying { selectTarget() }
-        planetName = targetPlanet.name
+        planetName = log.record(targetPlanet.sector)?.displayName ?? targetPlanet.name
         speed = velocity
         planetDistance = simd_length(planet)
         audio.onStateChange = { [weak self] playing, message in
@@ -99,10 +119,43 @@ final class FlightSession: ObservableObject {
            let body = universe.planets.first(where: { $0.sector != .zero && $0.palette != .tide }) {
             universe.advance(universe.relative(body) + SIMD3<Float>(0, 0, 240))
             selectTarget()
-            planetName = targetPlanet.name
+            planetName = log.record(targetPlanet.sector)?.displayName ?? targetPlanet.name
+        }
+        for (argument, kind) in [("--preview-signal", QuietActivity.Kind.signal), ("--preview-pattern", .pattern)] {
+            if ProcessInfo.processInfo.arguments.contains(argument),
+               let world = universe.planets.first(where: { QuietActivity.kind(for: $0) == kind }) {
+                let event = QuietActivity(world: world, kind: kind)
+                universe.advance(event.relative(to: universe.position) + SIMD3<Float>(0, 0, 240))
+                heading = simd_quatf(angle: 0, axis: [0,1,0])
+                accessibleSlow = true
+                activity = event
+            }
+        }
+        if ProcessInfo.processInfo.arguments.contains("--preview-discovery") {
+            let encounter = QuietConstellation(world: .home)
+            heading = simd_quatf(from: SIMD3<Float>(0, 0, -1), to: simd_normalize(encounter.relative(to: universe.position)))
+            accessibleSlow = true
+        }
+        if ProcessInfo.processInfo.arguments.contains("--preview-scenery") {
+            heading = simd_quatf(from: SIMD3<Float>(0, 0, -1), to: simd_normalize(SIMD3<Float>(90, 80, -340)))
+            accessibleSlow = true
+        }
+        let sceneryPreviews: [(String, SIMD3<Float>)] = [
+            ("--preview-nebula", [-160, 80, -470]),
+            ("--preview-ice", [-65, -8, -160]),
+            ("--preview-ripple", [210, 110, -650])
+        ]
+        for (argument, direction) in sceneryPreviews where ProcessInfo.processInfo.arguments.contains(argument) {
+            heading = simd_quatf(from: SIMD3<Float>(0, 0, -1), to: simd_normalize(direction))
+            accessibleSlow = true
+        }
+        if let previewSky, let body = universe.planets.first(where: { WorldAtmosphere.forWorld($0) == previewSky }) {
+            universe.advance(universe.relative(body) + SIMD3<Float>(0, 0, 110))
+            selectTarget()
+            planetDistance = simd_length(planet)
         }
         // Repeatable visual/audio QA without racing the normal approach window.
-        if ProcessInfo.processInfo.arguments.contains("--preview-landing") {
+        if ProcessInfo.processInfo.arguments.contains("--preview-landing") || previewSky != nil {
             universe.advance(planet - SIMD3<Float>(0, 8, -110))
             selectTarget()
             planetDistance = simd_length(planet)
@@ -164,6 +217,14 @@ final class FlightSession: ObservableObject {
         let t = min(1, max(0, (value - lower) / (upper - lower)))
         return t * t * (3 - 2 * t)
     }
+    #if DEBUG
+    func previewDistantPlanet(at position: SIMD3<Float>) {
+        guard ProcessInfo.processInfo.arguments.contains("--preview-horizon") else { return }
+        heading = simd_quatf(from: SIMD3<Float>(0, 0, -1), to: simd_normalize(position))
+        accessibleSlow = true
+    }
+    #endif
+
     var forward: SIMD3<Float> { heading.act([0, 0, -1]) }
 
     func touch(at point: CGPoint, size: CGSize) {
@@ -254,6 +315,16 @@ final class FlightSession: ObservableObject {
     private func pushAudioLevels(elapsed: Float = 0.15) {
         audio.setLevels(engine: engineVolume, signal: signalVolume, ambience: ambienceVolume,
                         speed: velocity / FlightTuning.cruiseSpeed, rest: restAmount, approach: approachAmount, elapsed: elapsed)
+        let audible = active && phase == .flying && !settingsPresented && !logPresented && activity?.kind == .signal
+        var pan: Float = 0
+        var strength: Float = 0
+        if audible, let event = activity {
+            let delta = heading.inverse.act(event.relative(to: universe.position))
+            pan = min(0.75, max(-0.75, delta.x / max(1, simd_length(delta)) * 2))
+            let proximity = min(1, max(0, 1 - (simd_length(delta) - 100) / 700))
+            strength = proximity * (0.15 + 0.85 * event.alignment(position: universe.position, forward: forward))
+        }
+        audio.setBeacon(strength: strength, pan: pan, volume: signalVolume, elapsed: elapsed)
     }
 
     private func scheduleSave() {
@@ -271,7 +342,7 @@ final class FlightSession: ObservableObject {
             velocity: velocity, phase: phase.rawValue, target: targetPlanet.sector,
             transition: transitionProgress, approachSpeed: approachSpeed, touchdownPlayed: touchdownPlayed,
             settings: VoyageSettings(engine: engineVolume, signal: signalVolume, atmosphere: ambienceVolume,
-                backgroundSound: backgroundSound), journal: log.snapshot)
+                backgroundSound: backgroundSound), journal: log.snapshot, destination: destination)
     }
 
     func save() {
@@ -282,10 +353,125 @@ final class FlightSession: ObservableObject {
         }
     }
 
+    var destinationWorld: PlanetDefinition? { destination.flatMap { Universe.generate($0).planet } }
+    var destinationName: String? { destination.flatMap { log.record($0)?.displayName ?? Universe.generate($0).planet?.name } }
+    var destinationDistance: Float? { destinationWorld.map { simd_length(universe.relative($0)) } }
+    var navigationHint: String {
+        guard let body = destinationWorld else { return "" }
+        let local = heading.inverse.act(universe.relative(body))
+        if groundVisible && body.sector == targetPlanet.sector { return "You are here" }
+        if local.z > 0 { return "Behind · turn gently" }
+        if abs(local.x) > abs(local.z) * 0.15 { return local.x < 0 ? "To the left" : "To the right" }
+        if abs(local.y) > abs(local.z) * 0.15 { return local.y > 0 ? "Above" : "Below" }
+        return canLand && body.sector == targetPlanet.sector ? "Within reach · land to rest" : "Ahead"
+    }
+    func setCourse(to id: SectorID?) {
+        if let id, Universe.generate(id).planet == nil { return }
+        destination = id
+        logPresented = false
+        save()
+    }
+    func nameWorld(_ id: SectorID, name: String) {
+        log.rename(id, to: name)
+        if id == targetPlanet.sector { planetName = log.record(id)?.displayName ?? targetPlanet.name }
+        save()
+    }
+    func rememberWorld(_ id: SectorID, favorite: Bool) { log.remember(id, favorite: favorite); save() }
+
+    var patternSequence: String { activity?.kind == .pattern ? activity!.sequence : "" }
+    func chooseLight(_ choice: Int) {
+        guard active, phase == .flying, !settingsPresented, !logPresented, patternAvailable,
+              let event = activity, event.kind == .pattern else { return }
+        release()
+        if event.accepts(choice) { completeActivity(event) }
+        else { gentleRetry = 4; discoveryHint = "The lights keep their rhythm. Look once more." }
+    }
+    private func completeActivity(_ event: QuietActivity) {
+        gentleRetry = 0
+        quietInterval = 20
+        log.findActivity(event, at: Date())
+        destination = event.world.sector
+        discoveryHint = event.kind == .signal ? "The signal belongs to \(log.record(event.world.sector)?.displayName ?? event.world.name)."
+            : "The rhythm points to \(log.record(event.world.sector)?.displayName ?? event.world.name)."
+        activity = nil
+        patternAvailable = false
+        signalClarity = 0
+        save()
+    }
+
+    private func observeConstellation(_ dt: Float, background: Bool) {
+        let allowed = !background && active && phase == .flying && !logPresented && !settingsPresented
+        guard allowed else {
+            if patternAvailable { patternAvailable = false }
+            if signalClarity != 0 { signalClarity = 0 }
+            return
+        }
+        quietInterval = max(0, quietInterval - dt)
+        guard quietInterval == 0 else { return }
+        gentleRetry = max(0, gentleRetry - dt)
+        encounterClock += dt
+        if encounterClock >= 0.5 {
+            encounterClock = 0
+            if let current = constellation, simd_length(current.relative(to: universe.position)) > 1200 { constellation = nil }
+            if let current = activity, simd_length(current.relative(to: universe.position)) > 1200 { activity = nil }
+            if constellation == nil && activity == nil {
+                let candidates = universe.planets.filter {
+                    simd_length(universe.relative($0)) < 1000 && (
+                        (($0.sector == .zero || $0.seed % 5 == 0) && log.record($0.sector)?.constellationFoundAt == nil)
+                        || (QuietActivity.kind(for: $0) == .signal && log.record($0.sector)?.signalFoundAt == nil)
+                        || (QuietActivity.kind(for: $0) == .pattern && log.record($0.sector)?.patternFoundAt == nil))
+                }.sorted { simd_length(universe.relative($0)) < simd_length(universe.relative($1)) }
+                if let world = candidates.first {
+                    if let kind = QuietActivity.kind(for: world) { activity = QuietActivity(world: world, kind: kind) }
+                    else { constellation = QuietConstellation(world: world) }
+                }
+            }
+        }
+        if var event = activity {
+            let alignment = event.alignment(position: universe.position, forward: forward)
+            if event.kind == .signal {
+                let clarity = event.clarity(position: universe.position, forward: forward)
+                if abs(signalClarity - clarity) > 0.025 { signalClarity = clarity }
+                let solved = event.listen(dt: dt, position: universe.position, forward: forward, allowed: allowed)
+                activity = event
+                let hint: String? = alignment > 0.1 ? (clarity > 0.6 ? "The signal is clear. Stay a moment."
+                    : "A quiet signal. Turn and drift closer to its source.") : "A faint signal is somewhere nearby."
+                if discoveryHint != hint { discoveryHint = hint }
+                if solved { completeActivity(event) }
+            } else {
+                let available = alignment > 0.35
+                if patternAvailable != available { patternAvailable = available }
+                let hint: String? = available ? (gentleRetry > 0 ? "The lights keep their rhythm. Look once more." : "The lights repeat. Which comes next?") : nil
+                if discoveryHint != hint { discoveryHint = hint }
+            }
+        } else {
+            if patternAvailable { patternAvailable = false }
+            if signalClarity != 0 { signalClarity = 0 }
+        }
+        if var encounter = constellation {
+            let solved = encounter.observe(dt: dt, position: universe.position, forward: forward, allowed: allowed)
+            let alignment = encounter.alignment(position: universe.position, forward: forward)
+            let hint: String? = alignment > 0.6 ? "The lights are becoming a leaf. Stay a moment."
+                : alignment > 0.05 ? "A few lights seem to belong together. Turn gently."
+                : simd_dot(forward, simd_normalize(encounter.relative(to: universe.position))) > 0.85
+                    ? "A small pattern of lights is nearby. Look around gently." : nil
+            if discoveryHint != hint { discoveryHint = hint }
+            constellation = encounter
+            if solved {
+                quietInterval = 20
+                log.findConstellation(on: encounter.world, at: Date())
+                destination = encounter.world.sector
+                discoveryHint = "A leaf of light points to \(log.record(encounter.world.sector)?.displayName ?? encounter.world.name)."
+                constellation = nil
+                save()
+            }
+        }
+    }
+
     func landOrLaunch() {
         guard canLand || phase == .landed else { return }
         release()
-        planetName = targetPlanet.name
+        planetName = log.record(targetPlanet.sector)?.displayName ?? targetPlanet.name
         transitionProgress = 0
         approachSpeed = velocity
         touchdownPlayed = false
@@ -323,7 +509,7 @@ final class FlightSession: ObservableObject {
             let target = min(cruise, limit)
             let rate: Float = target < velocity ? 1.7 : 0.38
             velocity += (target - velocity) * (1 - exp(-dt * rate))
-            if stopped { velocity = 0 }
+            if stopped || (target == 0 && velocity < 0.02) { velocity = 0 }
             if isProximityStopped != stopped { isProximityStopped = stopped }
             displacement = forward * velocity * dt
         } else if phase == .landing || phase == .launching {
@@ -369,6 +555,7 @@ final class FlightSession: ObservableObject {
         universe.advance(displacement)
         if phase == .flying { selectTarget() }
         log.travel(Double(simd_length(displacement)))
+        observeConstellation(dt, background: background)
         if previouslyStopped != isProximityStopped { save() }
         logClock += dt
         saveClock += dt
@@ -396,7 +583,7 @@ final class FlightSession: ObservableObject {
             position = groundVisible ? targetPlanet.position : universe.position
             speed = velocity
             planetDistance = simd_length(planet)
-            planetName = targetPlanet.name
+            planetName = log.record(targetPlanet.sector)?.displayName ?? targetPlanet.name
         }
         return displacement
     }

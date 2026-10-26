@@ -22,6 +22,33 @@ final class VoyageLog: ObservableObject {
         }
         distance = snapshot.distance
     }
+    func record(_ id: SectorID) -> WorldRecord? { worlds[id] }
+    var favorites: [WorldRecord] { entries.filter { $0.favorite == true } }
+    func rename(_ id: SectorID, to name: String) {
+        let clean = String(name.filter { !$0.isNewline && !($0.isASCII && $0.asciiValue! < 32) }
+            .trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
+        guard worlds[id] != nil else { return }
+        worlds[id]?.nickname = clean.isEmpty ? nil : clean
+        revision &+= 1
+    }
+    func remember(_ id: SectorID, favorite: Bool) {
+        guard worlds[id] != nil else { return }
+        worlds[id]?.favorite = favorite
+        revision &+= 1
+    }
+    func findConstellation(on world: PlanetDefinition, at date: Date) {
+        discover(world, at: date)
+        worlds[world.sector]?.constellationFoundAt = date
+        revision &+= 1
+    }
+    func findActivity(_ activity: QuietActivity, at date: Date) {
+        discover(activity.world, at: date)
+        guard var record = worlds[activity.world.sector] else { return }
+        if activity.kind == .signal { record.signalFoundAt = record.signalFoundAt ?? date }
+        else { record.patternFoundAt = record.patternFoundAt ?? date }
+        worlds[activity.world.sector] = record
+        revision &+= 1
+    }
     func discover(_ world: PlanetDefinition, at date: Date) {
         guard worlds[world.sector] == nil else { return }
         worlds[world.sector] = WorldRecord(id: world.sector, name: world.name, foundAt: date, position: world.position)

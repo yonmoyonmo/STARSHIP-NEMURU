@@ -101,3 +101,38 @@ Record battery percentage before/after, peak and settled app memory, CPU/energy 
 ## Evidence still required
 
 A sustained physical-device thermal/battery run, actual screen-lock/Now Playing controls, real headphone disconnects and interruptions, and manual VoiceOver/Dynamic Type checks. The host was unlocked and the new sheets passed native UI interaction and layout checks. Simulator lock-screen Now Playing controls remain unresolved; verify them on a physical device before treating that feature as accepted.
+
+## Quiet scenery pass — 2026-10-26
+
+- AppIcon: 1024×1024 opaque PNG registered and included in successful builds.
+- Simulator Debug/Release and signed iPhone Debug builds passed with dust rivers, comets and resting aurora.
+- Actual RealityKit checks passed: deterministic scenery, cache removal/bounds during 200 sector replacements and return, continuous aurora construction, animation and Reduce Motion freeze. Existing flight/save/audio model checks passed.
+- Simulator visual inspection caught and corrected gaps between aurora strips and an opaque comet-tail edge. The final curtains are continuous and the tail fades through transparency.
+- Physical installation was attempted but the device transport disconnected. The user explicitly deferred installation; no claim of device visual/performance validation is made for these additions.
+- Pending on device: observe a dust crossing while cruising/braking, comet visibility during turns, slow aurora motion, background/foreground and Reduce Motion, and extended frame-rate/thermal/battery checks.
+
+## Remaining scenery pass — 2026-10-26
+
+Nebula veils, ice gardens, distant ripples and resting dawn were added with independent seeds. Simulator visual QA and Debug/Release builds, iPhone Debug compilation, existing model checks and the expanded RealityKit cache/animation/proximity tests passed. Physical installation remains deferred per user request.
+
+On-device follow-up: check subtle nebula/dawn visibility at normal screen brightness; inspect ice rotation and close-range disappearance while steering; observe a complete 96-second wave cycle; confirm Reduce Motion/background freeze; profile extended flight frame rate, memory, battery and thermal load with the expanded 14-object cosmetic cache.
+
+## Planet horizon pass — 2026-10-26
+
+The planetary horizon now reaches 4,000 units, with 12 near + 12 distant planets and 16 clusters maximum. The gameplay neighborhood remains 125 sectors. Actual RealityKit checks confirm enabled distant bodies beyond 2,400 units, entity continuity during approach, and 200 streaming changes and return (peak 36 / limit 40). Existing flight/collision/landing/save checks pass. Physical installation remains deferred; verify long-distance planet readability and sustained performance on device later.
+
+## First observation/place loop and atmosphere pass — 2026-10-26
+
+Model checks cover three-second forgiving focus, no progress during paused/background observation, pause without loss when looking away, actual FlightSession completion and course creation, one-time discovery through save/relaunch, personal names and kept-place/course round trips, and legacy saves missing all added optional fields. Actual RealityKit checks include the leaf lights, four atmosphere sky batches and existing streaming bounds. Native Device Hub UI confirmed Leaf Haven naming and Keep this place registration in the disposable discovery preview.
+
+Visual QA inspected blue/amber/haze/airless landscapes. Opaque dark star trails against bright skies were corrected: atmospheric star points blend transparently and atmospheric trails are hidden. Airless sky retains the original orbiting points/arcs and hides aurora/dawn.
+
+Simulator Debug/Release and signed iPhone Debug builds pass. Physical installation remains deferred. Next device pass: discover a leaf with ordinary one-handed controls, leave it and resume, name and keep a visited world, relaunch and set a course back, inspect long names/Dynamic Type/VoiceOver and atmosphere brightness, verify landing/launch sky changes and prolonged performance.
+
+## Signal and repeating-light pass — 2026-10-26
+
+The remaining proposed observation families are implemented. Model checks cover directional/proximity signal focus, pause/look-away behavior, stable seeded repeating units and correct/different selections, menu guards, both actual FlightSession completion/course/save/relaunch paths, first-discovery timestamps and legacy optional-field compatibility. The generated low-level beacon loop is finite, bounded below 0.05 and continuous at its two-second boundary. Device audio I/O is still stubbed in model tests.
+
+RealityKit checks cover the actual signal/pattern shapes, one-activity visibility, hidden state and Reduce Motion freeze. Native Device Hub UI retained the pattern after a different answer and created L–167's course after the correct answer. Simulator screenshots capture both activity families. Simulator Debug/Release and signed iPhone Debug builds passed; physical installation remains deferred.
+
+Device follow-up: hear source direction/clarity with headphones and phone speakers, verify Distant signals zero/Pause/Resume/interruptions/lock behavior, locate and answer with ordinary one-handed controls, check small-screen/Dynamic Type layout, and evaluate whether the 20-second quiet interval and encounter density feel restful during a full session.

@@ -28,7 +28,7 @@ The panel refreshes about 10 times per second and passes touches through to flig
 
 ## Flight tuning — 2026-10-26
 
-Cruise/maximum speed is **24**, doubled from 12 scene units per second; the held-touch slow speed remains **2**. Input gain is 14 (previously 22), yaw/pitch scale is 0.7 (previously 0.8), and steering decay is 6 while holding / 4 after release (previously 5 / 2.5). Small drags therefore turn less, and rotation settles sooner. Planet braking uses 4.8 scene units/s² in its speed envelope to accommodate the higher cruise speed while preserving proximity holds and swept collision protection. Audio, particles, haptic normalization and save validation share the new maximum through `FlightTuning`.
+Cruise/maximum speed is now **16** scene units per second (reduced from 24); the held-touch slow speed remains **2**. Input gain is 14 (previously 22), yaw/pitch scale is 0.7 (previously 0.8), and steering decay is 6 while holding / 4 after release (previously 5 / 2.5). Small drags therefore turn less, and rotation settles sooner. Planet braking uses 4.8 scene units/s² in its speed envelope to accommodate the higher cruise speed while preserving proximity holds and swept collision protection. Audio, particles, haptic normalization and save validation share the new maximum through `FlightTuning`.
 
 The app-specific **Gentler motion** preference and setting were removed. A legacy saved `gentleMotion` key is ignored when loading; other voyage settings and records are retained. iOS system Reduce Motion is still respected automatically.
 
@@ -61,7 +61,7 @@ The two rear drive panels brighten smoothly during acceleration, settle to a ste
 - `SpaceView`: non-AR RealityKit scene, third-person camera, recycled near/far star layers with gentle parallax, and planet-specific resting landscapes.
 - `BrakingHaptics`: haptics-only Core Haptics continuous player with low sharpness, speed-dependent strength and a smoothed envelope; unsupported hardware silently skips feedback.
 - `Universe`: deterministic 640-unit sectors, a 5×5×5 active neighborhood, integral sector coordinates and bounded Double local offsets. Sector definitions are evicted and regenerated from stable coordinate seeds.
-- `UniverseScene`: at most 32 planet and 16 cluster mesh groups, distance-based loading/unloading, gentle distant emergence, and at most one mesh-group build per frame.
+- `UniverseScene`: at most 24 planet (12 near + 12 distant) and 16 cluster mesh groups, a 4,000-unit planetary horizon, gentle emergence, and at most one mesh-group build per frame.
 - `PolygonFactory`: faceted ship, planets with ten muted color families and seeded per-world tint variations and varying radii/topology/roughness, per-world seeded terrain, and sparse star clusters batched into three meshes each.
 - `VoyageAudio`: three independent real-time audio source nodes, a slowly changing engine pitch, and a generated soft touchdown buffer. Filtered seeded noise, low oscillators, and soft signal envelopes; no sample loading or allocation in the per-sample loop.
 
@@ -124,6 +124,87 @@ The final studio-splash version passed simulator Debug/Release and physical-devi
 
 ## Current boundaries
 
-The PoC and stage-5 streaming foundation are complete. Sparse star clusters are implemented; galaxies, nebulae and star bands remain design candidates. Terrain varies by world using one landing-site recipe. Music, export/cloud sync, and App Store distribution assets are not included. Stage 6's journal, persistence, background audio/lifecycle and accessibility implementation is present, with device validation documented separately.
+The PoC and stage-5 streaming foundation are complete. Sparse star clusters are implemented; galaxies and star bands remain design candidates; procedural nebula veils are implemented. Terrain varies by world using one landing-site recipe. Music, export/cloud sync, and App Store distribution assets are not included. Stage 6's journal, persistence, background audio/lifecycle and accessibility implementation is present, with device validation documented separately.
 
 Audio lifecycle follows Apple's [background playback guidance](https://developer.apple.com/documentation/avfaudio/avaudiosession/category-swift.struct/playback) and [route-change guidance](https://developer.apple.com/documentation/avfaudio/responding-to-audio-route-changes).
+
+## Quiet scenery — 2026-10-26
+
+The registered app icon is the 1024px opaque low-poly spacecraft artwork in `AppIcon.appiconset`.
+
+Three procedural scenery additions use independent seeds without changing planet/cluster definitions, collision, voyage coordinates or the save format:
+
+- **Dust rivers**: winding, sparse fields of 540 small tetrahedra, batched into three shades. Present in about 32% of sectors, plus the origin. Translation through them produces parallax; no per-particle animation is needed.
+- **Lonely comets**: a small pale core with two intersecting tapered, fading tail sheets. About 12% of sectors, plus the origin. A slow bounded drift is cosmetic; its animation phase restarts on app relaunch and is not a recorded orbital simulation.
+- **Resting aurora**: two continuous translucent, faceted curtains on about 42% of worlds, including C–18. Ten vertical fade layers per curtain soften the edges; only whole-curtain transforms animate. Colors are seeded muted mint or violet. The star sky continues its existing rotation independently.
+
+`VoyageScenery` keeps at most six dust fields, three comets, two nebula veils, two ice gardens and one distant ripple (14 objects total), refreshes selection every half second or sector change, builds at most one scenery object per frame, and removes evicted entities. Existing planet/cluster construction retains its own one-build budget. Cosmetic geometry is not added to the voyage log and does not require interaction. System Reduce Motion hides dust rivers and freezes comet/aurora drift; background rendering pauses with the existing display link. No extra sounds or haptics were added.
+
+Debug `--preview-scenery` starts a disposable origin voyage without reading/writing the real voyage store. `--preview-landing` shows C–18's aurora through the normal landing transition. Neither flag changes Release behavior.
+
+Validation includes actual RealityKit meshes, 200 sector replacements and return with cosmetic cache/scene-graph bounds, deterministic regeneration, aurora movement and Reduce Motion freeze, and the existing flight/save/audio model checks. Simulator images are a visual check; sustained device frame rate, battery and thermal behavior still need real use.
+
+## Further quiet scenery — 2026-10-26
+
+- **Nebula veils**: five overlapping faceted, translucent clouds in a seeded teal/violet/rose family, with eight outward fade bands. A roughly 15% sector chance; at most two fields. Stars remain visible through them and there is no full-screen fog filter.
+- **Ice gardens**: 12 small faceted translucent crystals per field. Roughly 18% sector chance; at most two fields. Each crystal turns at a gentle seeded rate. They have no collision; crystals shrink smoothly between 32 and 12 units from the camera and vanish at close range.
+- **Distant light ripples**: two staggered elliptical waves with 96-second expansion/fade cycles, smooth zero-brightness endpoints and five soft edge bands. Roughly 5.5% sector chance; at most one field. They disappear between 320 and 180 units from the camera to remain a distant phenomenon.
+- **Resting dawn**: a softly fading, warm horizon glow on C–18 and roughly 32% of generated worlds. Its brightness varies slowly over about four minutes and stays subtle behind the terrain. This is a cosmetic horizon light, not a simulated day/night clock or terrain light source.
+
+All new fields have deterministic independent seeds and origin examples in separate directions. The original dust/comet seed salts, planet/cluster generation and save format remain unchanged. Geometry is constructed once when cached; no per-frame procedural mesh rebuilds. Ripple material updates are limited to about 10 Hz, dawn to 2 Hz. System Reduce Motion freezes crystal rotation, light-wave expansion/fading and dawn breathing as well as the existing animations. The nebula itself is static.
+
+Debug `--preview-nebula`, `--preview-ice` and `--preview-ripple` each start a disposable slow voyage facing the origin example. `--preview-landing` includes the horizon dawn and aurora. These previews do not read/write the real voyage store and are ignored in Release.
+
+Actual RealityKit checks now include all five flight-scenery types over 200 sector changes and return, deterministic regeneration, crystal/wave animation and Reduce Motion freeze, camera proximity disappearance, and dawn material freeze/change. Simulator Debug/Release and iPhone Debug builds pass; installation on the physical device remains deferred at the user's request.
+
+## Distant planetary horizon — 2026-10-26
+
+Planet visibility expands from the old 900–1,100-unit emergence band to a 3,200–4,000-unit band (4 ly at the game scale). The camera far plane is 5,000. Planet meshes are capped at 24 instead of 32: 12 nearby gameplay planets and 12 stable distant selections spread across the sky. The distant budget initially favors bodies around 2,800 units away, rather than filling every slot with the next-nearest bodies. All distant bodies use their real seeded positions, radii, names and palettes; they are not decorative copies or enlarged markers.
+
+The horizon scans a bounded ±7-sector cube only when the gameplay sector changes, skipping sector centers beyond 4,300 units. It uses `Universe.generate` independently; the gameplay/collision/discovery neighborhood remains exactly 125 sectors. Distant selection persists while approaching and hands over to the nearby budget without replacing its entity. Newly loaded planet groups grow in over 1.5 seconds; far groups shrink smoothly near the outer horizon. Cluster visibility is unchanged. The total planet/cluster object budget falls from 48 to 40.
+
+Renderer checks verify visible planets beyond 2,400 units, unchanged gameplay-sector bounds, identity-preserving distant-to-near approach, and 200 sector replacements and return (observed peak 36 groups, configured limit 40). Existing flight/save/audio checks and simulator Debug/Release/iPhone builds pass. Debug `--preview-horizon` starts a disposable voyage and turns once toward a loaded distant planet; it never reads or writes the real voyage archive. Physical installation remains deferred.
+
+## A leaf of light, places and return courses — 2026-10-26
+
+The first quiet observation loop is implemented: **find a leaf of light → follow its place → name/keep the world → return later**.
+
+- One nearby constellation encounter is active at a time: C–18 and roughly one in five seeded worlds can host it. Seven pale lights settle into a leaf as the ship faces them; six dim connecting edges appear as alignment improves. A nearby hint is optional guidance, not a quest panel.
+- Facing the pattern within about 5.5 degrees accumulates three seconds of observation. Looking away or opening a sheet pauses progress without a penalty or countdown. It only advances during active foreground flight. Unfinished focus is session-local and is discarded after leaving the encounter range; completed discovery is saved once per world.
+- Discovery records the world and its leaf in the journal, then sets a manual course to its actual center. A quiet name/distance/bearing panel and corner marks identify the destination. There is no auto-steering, teleportation, score, failure state or new reward sound. The course can be dismissed at any time.
+- The journal offers a world detail page with its atmosphere, discovery/visit details and coordinates. Give it a personal name (up to 40 characters) and toggle **Keep this place**. The original chart name remains visible. Kept places appear near the top; the paginated full history searches both names and adds a Kept filter while preserving its initial browsing order.
+- After landing, **Name or keep this place** opens the same detail. **Set course to this place** provides the way back on a later voyage. Personal names, kept places, completed leaves and the chosen course persist through relaunch. The initial leaf observation is now joined by signal finding and repeating-light patterns (see below).
+
+The save format remains version 1 with optional `nickname`, `favorite`, `constellationFoundAt` fields on world records and optional `destination` on the voyage archive. Legacy archives lacking them decode successfully. Existing world IDs/positions, collision and movement are unchanged. Names are trimmed, restricted to 40 characters and stripped of newline/ASCII control characters; empty names restore the chart name.
+
+## Planet atmospheres — 2026-10-26
+
+Landing sky is seeded independently per world: subdued blue, amber, pale gray haze or airless black. The same world keeps the same sky on return. Background color changes under the existing black landing/launch midpoint; ordinary flight returns to the original dark space background.
+
+Atmospheric worlds use transparent pale stars rather than darkened opaque points, and hide the long star trails so they do not become black marks against brighter skies. Airless worlds keep the existing fully visible star sky and orbital arcs. Aurora and dawn are hidden on airless worlds; their original seeded availability applies to atmospheric worlds. Terrain colors and planet placement are unchanged. These are artistic atmosphere types, not physical weather or day/night simulation.
+
+Debug `--preview-discovery` starts a disposable origin voyage aligned with the leaf. `--preview-sky-0` through `--preview-sky-3` land on actual nearby worlds with blue/amber/haze/airless atmospheres respectively. All preview flags bypass the real save store and are ignored in Release.
+
+Validation: actual FlightSession leaf completion/course/save/relaunch; pause/look-away behavior; names/kept worlds/course round trips; old optional-field-free archives; deterministic coverage of all four sky types; actual leaf meshes and atmosphere sky batches; existing flight/save/audio and 200-sector renderer checks. Native simulator UI confirmed discovering C–18, saving the test name Leaf Haven and adding it to Places to return to. Simulator Debug/Release and iPhone Debug builds pass. Physical installation and sustained-device evaluation remain deferred at the user's request.
+
+## Remaining observation activities — 2026-10-26
+
+The proposed observation families are now implemented: a leaf constellation, finding a signal source, reading a light sequence, and returning to named/kept places using the existing manual course guide. One observation is active at a time. C–18 retains its leaf; other worlds use stable seed groups for leaf/signal/pattern eligibility. Completed activities are not offered again on that world. After a discovery there are 20 foreground seconds of quiet before another observation is selected.
+
+**Signal source:** turn and drift toward a pale source. A generated 256/384-Hz tone becomes stronger with alignment and proximity, with gently smoothed stereo panning toward the source. Screen text offers Faint/Nearer/Clear, so sound is optional. Four accumulated seconds of clear observation record the source and set its world's course. Looking away or opening a sheet does not punish accumulated focus. The tone follows the existing Distant signals volume (zero mutes it), pause/interruption and foreground policies. The two-second PCM loop is generated once, not loaded from a sample file; no audio data is allocated in a render callback.
+
+**Repeating lights:** face three small shapes and read five displayed symbols. Choose the sixth from Circle/Triangle/Diamond. Seeded repeating units include two-symbol alternation, a three-symbol cycle and a repeated-pair motif, with rotated symbol assignments. The world lights slowly emphasize the same repeating unit; the static sequence remains available with Reduce Motion. A different answer keeps the same problem and offers a gentle retry sentence. There is no countdown, score, life loss or time penalty. Correct observation records the world and sets a course.
+
+Both results appear in world details and journal rows and use the existing name/keep/return flow. Optional `signalFoundAt` and `patternFoundAt` record first discovery dates; old archives without them still load. Planet generation, movement, collision and the save version are unchanged. Unfinished observation state is session-local; leaving its 1,200-unit encounter range lets it go. Background/menu/rest states do not complete activities.
+
+Debug `--preview-signal` and `--preview-pattern` use actual nearby generated worlds in a disposable slow voyage, aligned with the relevant source. They never read/write the real voyage store and are ignored in Release.
+
+Validation includes direction/pause signal checks, all seeded pattern rules, wrong-choice and menu guards, actual FlightSession completion/course/save/relaunch for both kinds, first-discovery timestamps, old-save compatibility, the generated loop's finite/quiet/continuous waveform, and RealityKit shape/visibility/Reduce Motion checks. Native Device Hub UI confirmed a different answer retains the sequence and a correct answer creates L–167's course. Debug/Release simulator and signed iPhone builds pass. Physical installation remains deferred; real-device directional hearing/comfort and ordinary-control encounter difficulty still need user play feedback.
+
+## Cruise speed adjustment — 2026-10-26
+
+Maximum/cruise speed is 16, held-touch slow speed remains 2. Steering and braking tuning are unchanged. Historical version-1 saves with velocity/approach speed up to 24 still validate and restore their voyage; both speeds clamp to 16 on restoration. Audio, particles and thrusters use the shared current cruise speed.
+
+## Held-touch full stop — 2026-10-26
+
+Holding now brakes to exactly zero; once the exponential easing reaches 0.02 units/s it settles to zero rather than drifting asymptotically. Continued holding preserves position and dragging can turn in place. Release eases back to the 16-unit cruise speed. The HUD shows HOLDING POSITION / HOLD and a release hint at a manual stop. The 2-unit launch kickoff remains part of the departure transition, not the held-touch minimum. Checks verify exact stop, stationary holding/turning and release acceleration.

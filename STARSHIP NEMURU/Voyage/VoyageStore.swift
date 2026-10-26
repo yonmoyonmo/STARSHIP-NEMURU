@@ -16,6 +16,12 @@ nonisolated struct WorldRecord: Codable, Identifiable, Equatable, Sendable {
     var landings = 0
     var stay: TimeInterval = 0
     var position: UniversePosition?
+    var nickname: String?
+    var favorite: Bool?
+    var constellationFoundAt: Date?
+    var signalFoundAt: Date?
+    var patternFoundAt: Date?
+    var displayName: String { nickname?.isEmpty == false ? nickname! : name }
 }
 
 nonisolated struct JournalSnapshot: Codable, Equatable, Sendable {
@@ -37,26 +43,34 @@ nonisolated struct VoyageArchive: Codable, Sendable {
     var touchdownPlayed: Bool
     var settings: VoyageSettings
     var journal: JournalSnapshot
+    var destination: SectorID?
 
     func validate() throws {
         guard version == 1, generatorVersion == 1 else { throw ArchiveError.unsupported }
         func validSector(_ id: SectorID) -> Bool {
             [id.x, id.y, id.z].allSatisfy { $0 > -1_000_000_000_000_000 && $0 < 1_000_000_000_000_000 }
         }
+        if let destination {
+            guard validSector(destination), Universe.generate(destination).planet != nil else { throw ArchiveError.invalid }
+        }
         let rotationLength = heading.reduce(Float.zero) { $0 + $1 * $1 }
         guard validSector(position.sector), validSector(target),
               (0..<3).allSatisfy({ position.offset[$0].isFinite && abs(position.offset[$0]) <= 320 }),
               heading.count == 4, heading.allSatisfy(\.isFinite), (0.9...1.1).contains(rotationLength),
-              velocity.isFinite, (0...(FlightTuning.cruiseSpeed + 0.01)).contains(velocity),
+              velocity.isFinite, (0...(FlightTuning.maximumArchivedSpeed + 0.01)).contains(velocity),
               ["flying", "landing", "landed", "launching"].contains(phase),
               transition.isFinite, (0...1).contains(transition),
-              approachSpeed.isFinite, (0...(FlightTuning.cruiseSpeed + 0.01)).contains(approachSpeed),
+              approachSpeed.isFinite, (0...(FlightTuning.maximumArchivedSpeed + 0.01)).contains(approachSpeed),
               [settings.engine, settings.signal, settings.atmosphere].allSatisfy({ $0.isFinite && (0...1).contains($0) }),
               journal.distance.isFinite, journal.distance >= 0, journal.worlds.count <= 200_000,
               savedAt.timeIntervalSince1970.isFinite,
               Set(journal.worlds.map(\.id)).count == journal.worlds.count,
               journal.worlds.allSatisfy({ validSector($0.id) && !$0.name.isEmpty && $0.name.count <= 32
                   && $0.stay.isFinite && $0.stay >= 0 && $0.stay <= 10_000_000_000 && $0.landings >= 0
+                  && ($0.nickname.map { !$0.isEmpty && $0.count <= 40 && !$0.contains(where: { $0.isNewline || $0.isASCII && $0.asciiValue! < 32 }) } ?? true)
+                  && ($0.constellationFoundAt?.timeIntervalSince1970.isFinite ?? true)
+                  && ($0.signalFoundAt?.timeIntervalSince1970.isFinite ?? true)
+                  && ($0.patternFoundAt?.timeIntervalSince1970.isFinite ?? true)
                   && $0.foundAt.timeIntervalSince1970.isFinite
                   && ($0.position.map { point in validSector(point.sector)
                       && (0..<3).allSatisfy { point.offset[$0].isFinite && abs(point.offset[$0]) <= 320 } } ?? true)

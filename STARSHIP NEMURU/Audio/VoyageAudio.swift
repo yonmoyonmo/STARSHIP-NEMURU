@@ -69,11 +69,22 @@ nonisolated enum LandingSound {
     }
 }
 
+/// Seamlessly loopable low-level beacon; graph parameters remain on the main actor.
+nonisolated enum BeaconSound {
+    static let duration = 2.0
+    static func sample(at time: Double) -> Float {
+        Float((sin(2 * .pi * 256 * time) + 0.25 * sin(2 * .pi * 384 * time)) * 0.035)
+    }
+}
+
 @MainActor
 final class VoyageAudio {
     private let engine = AVAudioEngine()
     private let engineRate = AVAudioUnitVarispeed()
     private let touchdown = AVAudioPlayerNode()
+    private let beacon = AVAudioPlayerNode()
+    private var beaconBuffer: AVAudioPCMBuffer?
+    private var beaconLevel: Float = 0
     private var touchdownBuffer: AVAudioPCMBuffer?
     private var sources: [AVAudioSourceNode] = []
     private var mixers: [AVAudioMixerNode] = []
@@ -180,6 +191,15 @@ final class VoyageAudio {
             }
             touchdownBuffer = buffer
             engine.attach(engineRate)
+            engine.attach(beacon)
+            engine.connect(beacon, to: engine.mainMixerNode, format: format)
+            if let tone = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(rate * BeaconSound.duration)) {
+                tone.frameLength = tone.frameCapacity
+                for channel in 0..<2 {
+                    for frame in 0..<Int(tone.frameLength) { tone.floatChannelData?[channel][frame] = BeaconSound.sample(at: Double(frame) / rate) }
+                }
+                beaconBuffer = tone
+            }
             engine.attach(touchdown)
             engine.connect(touchdown, to: engine.mainMixerNode, format: format)
             for kind in [SynthVoice.Kind.engine, .signal, .atmosphere] {
@@ -206,6 +226,12 @@ final class VoyageAudio {
         for mixer in mixers { mixer.outputVolume = 0 }
         engine.prepare()
         try engine.start()
+        beacon.volume = 0
+        beaconLevel = 0
+        if !beacon.isPlaying, let tone = beaconBuffer {
+            beacon.scheduleBuffer(tone, at: nil, options: .loops, completionHandler: nil)
+            beacon.play()
+        }
         onStateChange?(true, nil)
         updateNowPlaying()
     }
@@ -228,6 +254,14 @@ final class VoyageAudio {
         mixers[2].outputVolume = ambience == 0 ? 0 : current.z
     }
 
+    func setBeacon(strength: Float, pan: Float, volume: Float, elapsed: Float) {
+        let target = min(1, max(0, strength)) * min(1, max(0, volume))
+        let smoothing = 1 - exp(-max(0, elapsed) / 0.8)
+        beaconLevel += (target - beaconLevel) * smoothing
+        beacon.volume = volume == 0 ? 0 : beaconLevel
+        beacon.pan += (min(0.75, max(-0.75, pan)) - beacon.pan) * smoothing
+    }
+
     func playTouchdown(volume: Float) {
         guard engine.isRunning, let buffer = touchdownBuffer else { return }
         touchdown.stop()
@@ -245,6 +279,8 @@ final class VoyageAudio {
     func stop() {
         wantsPlayback = false
         touchdown.stop()
+        beacon.stop()
+        beaconLevel = 0
         engine.pause()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         onStateChange?(false, nil)

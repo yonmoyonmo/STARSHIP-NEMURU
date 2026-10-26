@@ -108,7 +108,7 @@ enum PolygonFactory {
         return root
     }
 
-    static func restingSky(seed: UInt64) throws -> Entity {
+    static func restingSky(seed: UInt64, starVisibility: Float = 1) throws -> Entity {
         let root = Entity()
         var random = SeededRandom(seed: seed ^ 0x534B59)
         var groups = Array(repeating: [[SIMD3<Float>]](), count: StarColors.tints.count)
@@ -140,12 +140,16 @@ enum PolygonFactory {
         }
         let colors = StarColors.tints
         for (index, triangles) in groups.enumerated() {
-            root.addChild(ModelEntity(mesh: try mesh(triangles), materials: [material(uiColor(colors[index]))]))
+            var tint = material(uiColor(colors[index]))
+            if starVisibility < 1 { tint.blending = .transparent(opacity: .init(floatLiteral: starVisibility)) }
+            root.addChild(ModelEntity(mesh: try mesh(triangles), materials: [tint]))
         }
         for (index, triangles) in trails.enumerated() {
             let strength: Float = [0.48, 0.28, 0.14][index]
-            root.addChild(ModelEntity(mesh: try mesh(triangles),
-                materials: [material(uiColor(SIMD3<Float>(0.50, 0.60, 0.61) * strength))]))
+            let trail = ModelEntity(mesh: try mesh(triangles),
+                materials: [material(uiColor(SIMD3<Float>(0.50, 0.60, 0.61) * strength))])
+            trail.isEnabled = starVisibility > 0.9
+            root.addChild(trail)
         }
         return root
     }
