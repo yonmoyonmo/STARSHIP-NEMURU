@@ -4,6 +4,7 @@ struct ContentView: View {
     @StateObject private var flight = FlightSession(store: VoyageStore.applicationStore())
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("showVoyagePosition") private var showVoyagePosition = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -44,11 +45,24 @@ struct ContentView: View {
                         }.accessibilityLabel("Voyage log").disabled(!flight.controlsVisible)
                         Button {
                             flight.release()
+                            showVoyagePosition.toggle()
+                        } label: {
+                            Image(systemName: showVoyagePosition ? "location.fill" : "location")
+                                .font(.system(size: 18))
+                                .frame(width: 48, height: 48)
+                                .background(showVoyagePosition ? .white.opacity(0.16) : .white.opacity(0.06), in: Circle())
+                        }
+                        .accessibilityLabel("Galactic coordinates")
+                        .accessibilityValue(showVoyagePosition ? "Shown" : "Hidden")
+                        .accessibilityAddTraits(showVoyagePosition ? .isSelected : [])
+                        .disabled(!flight.controlsVisible)
+                        Button {
+                            flight.release()
                             flight.settingsPresented = true
                         } label: {
-                            Image(systemName: "waveform").font(.system(size: 18))
+                            Image(systemName: "gearshape").font(.system(size: 18))
                                 .frame(width: 48, height: 48).background(.white.opacity(0.06), in: Circle())
-                        }.accessibilityLabel("Sound settings")
+                        }.accessibilityLabel("Voyage settings")
                             .disabled(!flight.controlsVisible)
                     }
                     Spacer()
@@ -68,7 +82,7 @@ struct ContentView: View {
                             Text(status).tracking(2)
                             Spacer()
                             if flight.phase == .flying {
-                                Text(String(format: "%02.0f  /  DRIFT", flight.speed)).tracking(1)
+                                Text(String(format: "%02.0f  /  %@", flight.speed, flight.isProximityStopped ? "HOLD" : "DRIFT")).tracking(1)
                             }
                         }.font(.system(.caption2, design: .monospaced)).foregroundStyle(.white.opacity(0.55))
                         Text(instruction)
@@ -76,7 +90,13 @@ struct ContentView: View {
                     }
                 }
                 .padding(.horizontal, 25).padding(.top, 16).padding(.bottom, 22)
-                .opacity(flight.hudOpacity)
+                if showVoyagePosition {
+                    VoyagePositionView(position: flight.position)
+                    .padding(.horizontal, 25)
+                    .padding(.top, 84)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .allowsHitTesting(false)
+                }
                 Color.black.opacity(flight.fade).ignoresSafeArea().allowsHitTesting(false)
             }
             .foregroundStyle(Color(red: 0.8, green: 0.87, blue: 0.86))
@@ -92,6 +112,7 @@ struct ContentView: View {
         .onAppear { flight.reduceMotion = reduceMotion; flight.setActive(true) }
         .onDisappear { flight.shutdown() }
         .onChange(of: reduceMotion) { _, value in flight.reduceMotion = value }
+        .onChange(of: showVoyagePosition) { _, _ in flight.release() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { flight.setActive(true) }
             else if phase == .background { flight.setActive(false, background: true) }
@@ -102,7 +123,7 @@ struct ContentView: View {
 
     private var instruction: String {
         switch flight.phase {
-        case .flying: return "Hold to slow · Drag to turn · Release to drift"
+        case .flying: return flight.isProximityStopped ? "Turn away to drift · Land to rest" : "Hold to slow · Drag to turn · Release to drift"
         case .landing: return "Let Nemuru settle."
         case .landed: return "Stay a little. There is nothing to do."
         case .launching: return "The voyage continues."
@@ -111,7 +132,7 @@ struct ContentView: View {
 
     private var status: String {
         switch flight.phase {
-        case .flying: return flight.canLand ? "\(flight.planetName) · WITHIN REACH" : "FREE FLIGHT"
+        case .flying: return flight.isProximityStopped ? "HOLDING POSITION" : (flight.canLand ? "\(flight.planetName) · WITHIN REACH" : "FREE FLIGHT")
         case .landing: return "SETTLING DOWN"
         case .landed: return "\(flight.planetName) · A QUIET PLACE"
         case .launching: return "BACK INTO THE NIGHT"
@@ -132,9 +153,8 @@ struct ContentView: View {
                 }
                 Section {
                     Toggle("Keep sound when locked", isOn: $flight.backgroundSound)
-                    Toggle("Gentler motion", isOn: $flight.gentlerMotion)
                 } footer: {
-                    Text("While sound plays in the background, the voyage continues quietly. Gentler motion removes banking, bobbing and nearby light particles.")
+                    Text("While sound plays in the background, the voyage continues quietly.")
                 }
                 Section {
                     Text("Sounds are synthesized aboard. Set a layer to zero to silence it. Your voyage and settings save automatically.")

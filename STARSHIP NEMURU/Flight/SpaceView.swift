@@ -31,9 +31,13 @@ struct SpaceView: UIViewRepresentable {
         private let ground = Entity()
         private let shipPivot = Entity()
         private var ship = Entity()
+        private let thrusters = ShipThrusters()
+        private var thrusterResponse = ThrusterResponse()
         private let scenery = UniverseScene()
         private let brakingHaptics = BrakingHaptics()
         private var groundPlanet: PlanetDefinition?
+        private var restingSky = Entity()
+        private var restingSkyMotion = RestingSkyMotion(seed: 0)
         private struct Star {
             let entity: Entity
             let halfExtent: Float
@@ -48,6 +52,11 @@ struct SpaceView: UIViewRepresentable {
         private var ready = false
         private var wasActive = true
         private var preferredFPS: Float = 60
+        #if DEBUG
+        private let traceRestingSky = ProcessInfo.processInfo.arguments.contains("--trace-resting-sky")
+        private var skyTraceClock: Float = 0
+        private var skyTraceFrames = 0
+        #endif
 
         init(session: FlightSession) { self.session = session }
 
@@ -63,6 +72,7 @@ struct SpaceView: UIViewRepresentable {
             camera.orientation = simd_quatf(angle: -0.14, axis: [1, 0, 0])
             do {
                 ship = try PolygonFactory.ship()
+                thrusters.attach(to: ship)
                 shipPivot.addChild(ship)
                 anchor.addChild(shipPivot)
                 space.addChild(scenery.root)
@@ -84,26 +94,28 @@ struct SpaceView: UIViewRepresentable {
         private func prepareGround() throws {
             let definition = session.targetPlanet
             let terrain = try PolygonFactory.terrain(definition)
-            let moon = try PolygonFactory.planet(definition)
-            moon.scale = SIMD3(repeating: 22 / definition.radius)
-            moon.position = [-65, 45, -170]
+            terrain.name = "terrain"
+            let sky = try PolygonFactory.restingSky(seed: definition.seed)
+            sky.name = "resting-sky"
+            restingSkyMotion = RestingSkyMotion(seed: definition.seed, elapsed: session.log.restingTime(on: definition))
+            sky.orientation = restingSkyMotion.orientation
             for child in Array(ground.children) { child.removeFromParent() }
             ground.addChild(terrain)
-            ground.addChild(moon)
+            ground.addChild(sky)
+            restingSky = sky
             groundPlanet = definition
         }
 
         private func createStars() {
             var random = SeededRandom(seed: 0x4E454D555255)
             let mesh = MeshResource.generateBox(size: 1)
-            let colors: [UIColor] = [UIColor(red: 0.42, green: 0.53, blue: 0.57, alpha: 1),
-                                     UIColor(red: 0.65, green: 0.67, blue: 0.58, alpha: 1),
-                                     UIColor(red: 0.28, green: 0.38, blue: 0.46, alpha: 1)]
+            let starMaterials = StarColors.tints.map { PolygonFactory.material(PolygonFactory.uiColor($0)) }
+            var colorRandom = SeededRandom(seed: 0x53544152434F4C)
             // A sparse near layer supplies parallax while distant stars retain the calm background.
             for i in 0..<1000 {
                 let foreground = i >= 700
                 let extent: Float = foreground ? 90 : 420
-                let star = ModelEntity(mesh: mesh, materials: [PolygonFactory.material(colors[i % colors.count])])
+                let star = ModelEntity(mesh: mesh, materials: [starMaterials[StarColors.index(sample: colorRandom.value())]])
                 star.position = [random.range(-extent, extent), random.range(-extent, extent), random.range(-extent, extent)]
                 let size = foreground ? random.range(0.045, 0.12) : random.range(0.3, 0.85)
                 star.scale = SIMD3(repeating: size)
@@ -125,7 +137,13 @@ struct SpaceView: UIViewRepresentable {
                 link.preferredFrameRateRange = CAFrameRateRange(minimum: fps, maximum: fps, preferred: fps)
             }
             elapsed += dt
+            let previousSpeed = session.velocity
             let movement = session.update(dt)
+            let acceleration = (session.velocity - previousSpeed) / max(0.001, dt)
+            thrusterResponse.update(speed: session.velocity, acceleration: acceleration,
+                braking: session.touching || session.accessibleSlow || session.isProximityStopped || acceleration < -0.05,
+                liftingOff: session.phase == .launching, resting: session.phase == .landed, dt: dt)
+            thrusters.apply(thrusterResponse.brightness)
             let canBrake = session.phase == .flying && !session.settingsPresented && !session.logPresented
             if canBrake {
                 brakingHaptics.update(holding: session.touching, speed: session.velocity, elapsed: dt)
@@ -140,12 +158,25 @@ struct SpaceView: UIViewRepresentable {
                 applySceneMode()
             }
             if showingGround {
+                restingSkyMotion.advance(dt, reduceMotion: session.reduceMotion)
+                restingSky.orientation = restingSkyMotion.orientation
+                #if DEBUG
+                if traceRestingSky {
+                    skyTraceClock += dt
+                    skyTraceFrames += 1
+                    if skyTraceClock >= 2 {
+                        print("NEMURU_SKY frames=\(skyTraceFrames) seconds=\(skyTraceClock) angle=\(restingSkyMotion.angle) applied=\(restingSky.orientation.angle) reduceMotion=\(session.reduceMotion) systemReduceMotion=\(UIAccessibility.isReduceMotionEnabled)")
+                        skyTraceClock = 0
+                        skyTraceFrames = 0
+                    }
+                }
+                #endif
                 shipPivot.position = [0, session.groundShipHeight, 0]
                 ship.orientation = simd_quatf(angle: 0, axis: [0, 0, 1])
             } else {
-                shipPivot.position = [0, session.gentleMotion ? 0 : sin(elapsed * 0.7) * 0.045, 0]
+                shipPivot.position = [0, session.reduceMotion ? 0 : sin(elapsed * 0.7) * 0.045, 0]
                 shipPivot.orientation = session.heading
-                let bank = simd_quatf(angle: session.gentleMotion ? 0 : -session.steering.x * 0.35, axis: [0, 0, 1])
+                let bank = simd_quatf(angle: session.reduceMotion ? 0 : -session.steering.x * 0.35, axis: [0, 0, 1])
                 ship.orientation = simd_slerp(ship.orientation, bank, 1 - exp(-dt * 4))
                 scenery.update(session.universe, dt: dt)
                 let follow = 1 - exp(-dt * 3)
@@ -160,13 +191,13 @@ struct SpaceView: UIViewRepresentable {
                         if star.position[axis] > entry.halfExtent { star.position[axis] -= entry.halfExtent * 2 }
                     }
                     if entry.foreground {
-                        star.isEnabled = !session.gentleMotion
+                        star.isEnabled = !session.reduceMotion
                         // Shrink before recycling and near the camera: no sudden arrivals or oversized flashes.
                         let edge = simd_abs(star.position).max() / entry.halfExtent
                         let boundaryVisibility = 1 - smoothstep(0.72, 1, edge)
                         let cameraVisibility = smoothstep(8, 24, simd_distance(star.position, camera.position))
                         let size = entry.size * boundaryVisibility * cameraVisibility
-                        let stretch = 1 + 0.6 * min(1, session.velocity / 12)
+                        let stretch = 1 + 0.6 * min(1, session.velocity / FlightTuning.cruiseSpeed)
                         star.scale = [size, size, size * stretch]
                         star.orientation = session.heading
                     }
@@ -178,15 +209,15 @@ struct SpaceView: UIViewRepresentable {
             showingGround = session.groundVisible
             ground.isEnabled = showingGround
             space.isEnabled = !showingGround
-            for entry in stars where entry.foreground {
-                entry.entity.isEnabled = !showingGround && !session.gentleMotion
+            for entry in stars {
+                entry.entity.isEnabled = !showingGround && (!entry.foreground || !session.reduceMotion)
             }
             if showingGround {
                 shipPivot.position = [0, session.groundShipHeight, 0]
                 shipPivot.orientation = simd_quatf(angle: 0.4, axis: [0, 1, 0])
                 ship.orientation = simd_quatf(angle: 0, axis: [0, 0, 1])
                 camera.position = [8, 4.5, 13]
-                camera.look(at: [0, 0.8, 0], from: camera.position, relativeTo: nil)
+                camera.look(at: [0, 2.4, -2], from: camera.position, relativeTo: nil)
             } else {
                 shipPivot.position = .zero
                 shipPivot.orientation = session.heading

@@ -49,14 +49,25 @@ nonisolated struct UniversePosition: Equatable, Codable, Sendable {
     }
 }
 
+nonisolated struct PlanetColors: Equatable {
+    let low: SIMD3<Float>
+    let high: SIMD3<Float>
+}
+
 nonisolated enum PlanetPalette: Int, CaseIterable {
-    case tide, dusk, clay, frost
+    case tide, dusk, clay, frost, ochre, moss, rose, indigo, pearl, ember
     var low: SIMD3<Float> {
         switch self {
         case .tide: return [0.12, 0.21, 0.24]
         case .dusk: return [0.20, 0.16, 0.26]
         case .clay: return [0.26, 0.19, 0.16]
         case .frost: return [0.19, 0.25, 0.29]
+        case .ochre: return [0.30, 0.25, 0.12]
+        case .moss: return [0.13, 0.25, 0.17]
+        case .rose: return [0.30, 0.17, 0.22]
+        case .indigo: return [0.14, 0.17, 0.31]
+        case .pearl: return [0.26, 0.28, 0.28]
+        case .ember: return [0.32, 0.13, 0.14]
         }
     }
     var high: SIMD3<Float> {
@@ -65,7 +76,22 @@ nonisolated enum PlanetPalette: Int, CaseIterable {
         case .dusk: return [0.39, 0.32, 0.45]
         case .clay: return [0.47, 0.36, 0.26]
         case .frost: return [0.43, 0.52, 0.56]
+        case .ochre: return [0.64, 0.55, 0.29]
+        case .moss: return [0.35, 0.53, 0.32]
+        case .rose: return [0.61, 0.37, 0.44]
+        case .indigo: return [0.34, 0.39, 0.62]
+        case .pearl: return [0.58, 0.62, 0.56]
+        case .ember: return [0.60, 0.28, 0.30]
         }
+    }
+
+    func colors(seed: UInt64) -> PlanetColors {
+        // A separate stream keeps cosmetic variation from changing terrain or celestial placement.
+        var random = SeededRandom(seed: seed ^ 0x434F4C4F5253)
+        let tint = SIMD3(random.range(0.88, 1.12), random.range(0.88, 1.12), random.range(0.88, 1.12))
+        let brightness = random.range(0.92, 1.08)
+        return PlanetColors(low: simd_clamp(low * tint * brightness, .zero, SIMD3(repeating: 0.72)),
+                            high: simd_clamp(high * tint * brightness, .zero, SIMD3(repeating: 0.72)))
     }
 }
 
@@ -77,6 +103,12 @@ nonisolated struct PlanetDefinition: Equatable {
     let roughness: Float
     let palette: PlanetPalette
     let name: String
+    var colors: PlanetColors { palette.colors(seed: seed) }
+    var position: UniversePosition {
+        var position = UniversePosition(sector: sector)
+        position.advance(offset)
+        return position
+    }
     var collisionRadius: Float { radius * (1 + roughness) }
     static let home = PlanetDefinition(sector: .zero, offset: [0, 8, -240], seed: 18,
                                       radius: 36, roughness: 0, palette: .tide, name: "C–18")
@@ -132,7 +164,7 @@ final class Universe {
         if random.value() < 0.56 {
             let offset = SIMD3(random.range(-130, 130), random.range(-130, 130), random.range(-130, 130))
             let radius = random.range(24, 52)
-            let palette = PlanetPalette(rawValue: Int(random.value() * 4)) ?? .tide
+            let palette = PlanetPalette(rawValue: Int(random.value() * Float(PlanetPalette.allCases.count))) ?? .tide
             let prefixes = ["C", "M", "L", "N", "S", "V"]
             let name = "\(prefixes[Int(seed % 6)])–\(100 + (seed >> 8) % 900)"
             planet = PlanetDefinition(sector: id, offset: offset, seed: seed, radius: radius,

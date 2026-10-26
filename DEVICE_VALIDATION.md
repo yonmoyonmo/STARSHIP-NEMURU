@@ -1,6 +1,6 @@
 # Device validation
 
-Status as of 2026-10-21: work has ended for the day, and the latest Debug build with the studio splash has been installed and launched on the iPhone SE (3rd generation). Further development awaits user feedback. Remaining tests below are not marked complete.
+Status as of 2026-10-26: Galactic XYZ coordinates, visited-world positions, near-planet holds and a moving resting sky are implemented. The latest Debug build has been installed and launched on the iPhone SE (3rd generation). Remaining physical-device tests below are not marked complete.
 
 Use an iPhone with a Release build. Record the iPhone model, iOS version, app build, battery health, room temperature, brightness, audio route, and system volume before comparing runs. The iOS simulator verifies behavior but is not a battery, thermal, or radio-route measurement.
 
@@ -18,13 +18,53 @@ These model tests use a stub for device audio I/O; they do not establish physica
 
 ## Completed simulator checks
 
-- iPhone 18 Pro / iOS 27: log and settings layout, open/close, Pause/Resume sound, and Gentler motion toggle.
+- iPhone 18 Pro / iOS 27: log and settings layout, open/close, Pause/Resume sound, and the then-existing Gentler motion toggle (removed in the latest tuning pass).
 - Release save persists across termination, app reinstallation, and normal relaunch, retaining journal and preferences.
 - Screen-lock background execution with the real audio engine: consecutive saves advanced by 30 seconds and about 360 raw distance units (0.360 ly under the current display scale).
 - Now Playing controls did not appear on this simulator lock screen. Their registration is implemented, but visible controls and remote commands still need physical-device verification.
 - Journal update (2026-10-21): a Debug preview with 121 worlds shows a three-world summary, light-year distance and a separate full history. Native UI checks reached the first 40-record footer, loaded more records, and confirmed that typing `C18` finds names displayed with an en dash. The simulator and physical-device Debug builds passed. All/Visited filtering and larger Dynamic Type still need a manual interaction pass.
 
 - Studio splash (2026-10-21): the original logo asset is unchanged; the final artwork was visually inspected and captured. A normal simulator launch reached the flight UI after the intro. The built Info.plist contains the named launch background. The final simulator Debug/Release and physical-device Debug builds passed; the latter was installed and launched. The user accepted the splash design.
+
+## Galactic coordinates and world update — 2026-10-26
+
+The user chose fixed Cartesian **Galactic coordinates: X / Y / Z** in light years, relative to C–18. Model checks cover axis signs across sector boundaries and far coordinates, visited-planet center serialization, legacy JSON with the new location field absent, and backfilling centers without changing journal counts or distance. The landing position display matches the recorded planet center.
+
+Approach checks now cover a full stable stop, no unsolicited heading change, pilot turning to leave, and restoration of a stopped voyage. The one-hour traversal uses scripted pilot turns when stopped and crossed 167 sector boundaries after the 24-unit speed update. It is not an unattended auto-avoidance test. Existing collision safeguards, landing/departure, saves, background and waveform checks also pass.
+
+Resting sky checks cover slow rotation, no motion with system Reduce Motion, phase initialization from saved stay time, and the actual batched RealityKit star mesh/cache limits. The simulator landscape was inspected without the duplicated planet; the journal coordinate disclosure was opened through native UI automation. A generated-world approach reached HOLDING POSITION / 00 HOLD with landing available. Final simulator Debug/Release and iPhone Debug builds passed, and the iPhone build was installed and launched.
+
+Physical checks still required: approach and leave at different angles, stops with background sound enabled, landing and departure near another planet, visited coordinates after a real-device relaunch, readability of signed XYZ values, and visual continuity of the moving/frozen sky. Existing thermal/battery, headphone, lock-screen media controls and accessibility checks remain outstanding.
+
+## Three buttons and flight tuning — 2026-10-26
+
+The app-specific Gentler motion setting and saved preference were removed; system Reduce Motion remains automatic. Old JSON containing `gentleMotion: true` is accepted and the unknown setting is ignored. The top row now has standalone log, coordinate toggle and settings buttons. Native simulator interaction verified the coordinate button's Hidden/Shown state and settings without the removed option. Model checks pass for cruise speed 24, serialization at that speed, precise five-point drags, release settling and the existing full collision/hold/landing/save suite. Debug simulator, Release simulator and iPhone Debug builds passed.
+
+Physical-device assessment of the new steering feel and higher-speed approach is still required. The lower small-drag sensitivity and shorter steering tail are intentional; no user-configurable sensitivity setting was added.
+
+## Automatic HUD dimming removed — 2026-10-26
+
+Idle-dependent HUD opacity and the coordinate panel's dimming binding were removed. Controls retain their normal opacity after inactivity. The model check now verifies that resting controls remain available after a long stay rather than testing fade/wake behavior. Idle frame-rate throttling still does not disable input. Verify all three buttons, landing/departure controls and steering after at least 30 seconds untouched. The simulator was left untouched, its normal HUD opacity was visually confirmed, and the settings button opened the sheet on the first click without a wake-up touch. Model checks and simulator Debug/Release plus iPhone Debug builds passed. The fix was installed and launched on the iPhone SE (3rd generation). OS auto-lock and the separate scene-transition fades are unchanged.
+
+## Orbital sky and drive panels — 2026-10-26
+
+The sky now rotates about a pole visible in the upper landscape at 0.01 rad/s. A sparse subset of stars has short fading arcs; the sky remains bounded to nine meshes after the color expansion (six point-color groups, three neutral trail groups). Model checks verify visual drive levels for acceleration, cruise, braking, stop/rest, launch-before-liftoff and 30/60 Hz smoothing. Actual RealityKit checks attach the driver to both named engine panels, verify bright and dark material colors, and check the sky geometry budget.
+
+Simulator visual checks confirmed the resting sky arcs, dark drive panels while resting, and lit panels after launch/cruise. Final simulator Debug/Release and iPhone Debug builds passed, and the iPhone build was installed and launched.
+
+Physical checks: watch the resting sky for at least one minute, verify circular motion rather than camera motion, enable system Reduce Motion and check it freezes without a jump, then compare drive brightness while accelerating, holding to slow, auto-holding near a planet, resting and taking off. Check low device brightness for both readable quiet glow and sufficiently dark stopped panels. No dynamic light, flame particle or extra audio effect is added.
+
+## Resting-sky perceptibility follow-up — 2026-10-26
+
+The user reported no visible movement after the earlier visual pass. On the actual iPhone SE (3rd generation), a short Debug trace confirmed approximately 15 Hz landscape updates, changing requested/applied rotation, and both app/system Reduce Motion false. The simulator's actual before/after sky images also showed displaced star centroids. Increasing rotation from 0.0035 to 0.01 rad/s was then installed and launched normally, and the user confirmed that the stars visibly move. A five-second off-pole displacement assertion was added to the passing model suite. Debug `--trace-resting-sky` remains available for diagnostics and is excluded from Release; no new UI setting or save-schema change was introduced.
+
+## Color variety — 2026-10-26
+
+Ten planet families and independent seeded per-world tints are implemented. Model checks cover deterministic color regeneration, intra-family differences, bounded RGB values, all ten generated families and weighted coverage of all six star tints. Actual RealityKit checks build the ten planet/terrain families and the nine-mesh resting sky, and retain the existing planet/cluster cache bounds. A before/after run over 2,023 sectors matched all non-color generation fields (planet/cluster presence and centers, radius, roughness, name and seed). Existing save and journal checks pass.
+
+Simulator review confirmed a newly generated ochre planet, matching terrain and mixed warm/cool stars. Final Debug/Release simulator and iPhone Debug builds passed; the iPhone build was installed and launched.
+
+Manual review should include warm/cold planets and terrain, natural-looking colored stars, night-time device brightness and the absence of color flicker while stars recycle or the sky rotates. Colors are cosmetic; no new gameplay classification or astronomical claim is attached to them.
 
 ## Completed physical-device haptic check
 
@@ -37,7 +77,7 @@ These model tests use a stub for device audio I/O; they do not establish physica
 3. Enable **Keep sound when locked**. Lock the iPhone for at least five minutes. Listen for continuity and check the live Now Playing title. Use Play and Pause from the lock screen, unlock, and verify progress in the log and a stable camera.
 4. Disable background sound, then lock the phone. Both sound and background travel should stop. Repeat with all three volumes set to zero.
 5. With wired or Bluetooth headphones, disconnect the route while locked. Playback must pause without unexpectedly moving to the speaker, and must stay paused until explicitly resumed. Reconnect and resume. Repeat with an interruption from a call or another nonmixable audio app; resume only if the OS permits it.
-6. Enable system Reduce Motion, then the app's **Gentler motion**. Verify that banking, bobbing, and nearby particles are removed while steering remains usable. Check the log and settings with large Dynamic Type and VoiceOver. The flight space provides named turn, slow, and resume-drift accessibility actions.
+6. Enable system Reduce Motion. Verify that banking, bobbing, and nearby particles are removed while steering remains usable. Check the log and settings with large Dynamic Type and VoiceOver. The flight space provides named turn, slow, and resume-drift accessibility actions.
 7. On a haptics-capable iPhone, hold to brake for at least 15 seconds: feel a soft continuous vibration without repeated taps or loop seams, tapering as speed settles. Release and check a smooth fade. Repeat rapid press/release, steering while held, opening either sheet, landing, and locking/backgrounding: no stuck vibration. Resume after unlock or an interruption and check that feedback works on the next hold. Verify that voyage audio continues normally. Simulator builds compile this path but cannot establish its tactile strength or continuity.
 
 8. Cold-launch the app and verify that the studio logo fades into the voyage, with audio starting as the voyage appears. Background/lock during the intro, return, and check that it finishes without getting stuck or replaying on later foreground returns. Repeat with Reduce Motion enabled. Intro visuals and ordinary transition were checked in the simulator; these lifecycle/accessibility cases still need physical-device verification.

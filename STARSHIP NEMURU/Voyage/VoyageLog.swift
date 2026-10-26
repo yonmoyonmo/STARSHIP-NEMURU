@@ -16,11 +16,15 @@ final class VoyageLog: ObservableObject {
 
     init(_ snapshot: JournalSnapshot = JournalSnapshot()) {
         worlds = Dictionary(uniqueKeysWithValues: snapshot.worlds.map { ($0.id, $0) })
+        // Old journals already contain sector IDs; reconstruct their unchanged generated centers.
+        for id in Array(worlds.keys) where worlds[id]?.position == nil {
+            worlds[id]?.position = Universe.generate(id).planet?.position
+        }
         distance = snapshot.distance
     }
     func discover(_ world: PlanetDefinition, at date: Date) {
         guard worlds[world.sector] == nil else { return }
-        worlds[world.sector] = WorldRecord(id: world.sector, name: world.name, foundAt: date)
+        worlds[world.sector] = WorldRecord(id: world.sector, name: world.name, foundAt: date, position: world.position)
         revision &+= 1
     }
     func land(on world: PlanetDefinition, at date: Date) {
@@ -38,4 +42,5 @@ final class VoyageLog: ObservableObject {
         worlds[world.sector]?.stay += seconds
     }
     func refresh() { revision &+= 1 }
+    func restingTime(on world: PlanetDefinition) -> TimeInterval { worlds[world.sector]?.stay ?? 0 }
 }

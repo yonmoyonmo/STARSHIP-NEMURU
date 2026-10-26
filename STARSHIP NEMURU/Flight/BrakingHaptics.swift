@@ -16,7 +16,7 @@ final class BrakingHaptics {
     func update(holding: Bool, speed: Float, elapsed: Float) {
         guard supported else { return }
         // Strongest while shedding cruising speed, settling to a faint texture at low speed.
-        let braking = min(1, max(0, (speed - 2) / 10))
+        let braking = min(1, max(0, (speed - FlightTuning.slowSpeed) / (FlightTuning.cruiseSpeed - FlightTuning.slowSpeed)))
         let target: Float = holding ? 0.5 + 0.35 * braking : 0
         guard holding || player != nil else { return }
         if player == nil {

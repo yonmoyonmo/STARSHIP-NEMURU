@@ -5,7 +5,6 @@ nonisolated struct VoyageSettings: Codable, Equatable, Sendable {
     var signal: Float = 0.3
     var atmosphere: Float = 0.5
     var backgroundSound = true
-    var gentleMotion = false
 }
 
 nonisolated struct WorldRecord: Codable, Identifiable, Equatable, Sendable {
@@ -16,6 +15,7 @@ nonisolated struct WorldRecord: Codable, Identifiable, Equatable, Sendable {
     var lastLandedAt: Date?
     var landings = 0
     var stay: TimeInterval = 0
+    var position: UniversePosition?
 }
 
 nonisolated struct JournalSnapshot: Codable, Equatable, Sendable {
@@ -47,10 +47,10 @@ nonisolated struct VoyageArchive: Codable, Sendable {
         guard validSector(position.sector), validSector(target),
               (0..<3).allSatisfy({ position.offset[$0].isFinite && abs(position.offset[$0]) <= 320 }),
               heading.count == 4, heading.allSatisfy(\.isFinite), (0.9...1.1).contains(rotationLength),
-              velocity.isFinite, (0...12.01).contains(velocity),
+              velocity.isFinite, (0...(FlightTuning.cruiseSpeed + 0.01)).contains(velocity),
               ["flying", "landing", "landed", "launching"].contains(phase),
               transition.isFinite, (0...1).contains(transition),
-              approachSpeed.isFinite, (0...12.01).contains(approachSpeed),
+              approachSpeed.isFinite, (0...(FlightTuning.cruiseSpeed + 0.01)).contains(approachSpeed),
               [settings.engine, settings.signal, settings.atmosphere].allSatisfy({ $0.isFinite && (0...1).contains($0) }),
               journal.distance.isFinite, journal.distance >= 0, journal.worlds.count <= 200_000,
               savedAt.timeIntervalSince1970.isFinite,
@@ -58,6 +58,8 @@ nonisolated struct VoyageArchive: Codable, Sendable {
               journal.worlds.allSatisfy({ validSector($0.id) && !$0.name.isEmpty && $0.name.count <= 32
                   && $0.stay.isFinite && $0.stay >= 0 && $0.stay <= 10_000_000_000 && $0.landings >= 0
                   && $0.foundAt.timeIntervalSince1970.isFinite
+                  && ($0.position.map { point in validSector(point.sector)
+                      && (0..<3).allSatisfy { point.offset[$0].isFinite && abs(point.offset[$0]) <= 320 } } ?? true)
                   && ($0.landings == 0 || $0.firstLandedAt != nil) }) else { throw ArchiveError.invalid }
         guard let body = Universe.generate(target).planet else { throw ArchiveError.invalid }
         if phase != "flying" {

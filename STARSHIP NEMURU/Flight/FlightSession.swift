@@ -7,21 +7,20 @@ import simd
 final class FlightSession: ObservableObject {
     enum Phase: String { case flying, landing, landed, launching }
     @Published private(set) var phase: Phase = .flying
-    @Published private(set) var speed: Float = 12
+    @Published private(set) var speed: Float = FlightTuning.cruiseSpeed
+    @Published private(set) var isProximityStopped = false
     @Published private(set) var planetDistance: Float = 240
-    @Published private(set) var hudOpacity: Double = 1
     @Published private(set) var fade: Double = 0
+    @Published private(set) var position = UniversePosition()
     @Published var settingsPresented = false
     @Published var engineVolume: Float = 0.5 { didSet { scheduleSave() } }
     @Published var signalVolume: Float = 0.3 { didSet { scheduleSave() } }
     @Published var ambienceVolume: Float = 0.5 { didSet { scheduleSave() } }
     @Published var backgroundSound = true { didSet { scheduleSave() } }
-    @Published var gentlerMotion = false { didSet { scheduleSave() } }
     @Published var logPresented = false
     @Published private(set) var soundPlaying = false
     @Published private(set) var storageMessage: String?
     var reduceMotion = false
-    var gentleMotion: Bool { reduceMotion || gentlerMotion }
     var accessibleSlow = false
     @Published private(set) var audioError: String?
 
@@ -43,7 +42,7 @@ final class FlightSession: ObservableObject {
     private(set) var touching = false
     private(set) var steering = SIMD2<Float>.zero
     private(set) var heading = simd_quatf(angle: 0, axis: [0, 1, 0])
-    private(set) var velocity: Float = 12
+    private(set) var velocity: Float = FlightTuning.cruiseSpeed
     var planet: SIMD3<Float> { universe.relative(targetPlanet) }
     private(set) var groundVisible = false
     private var lastTouch: CGPoint?
@@ -85,7 +84,6 @@ final class FlightSession: ObservableObject {
             signalVolume = archive.settings.signal
             ambienceVolume = archive.settings.atmosphere
             backgroundSound = archive.settings.backgroundSound
-            gentlerMotion = archive.settings.gentleMotion
         }
         storageMessage = report?.message
         if phase == .flying { selectTarget() }
@@ -133,6 +131,7 @@ final class FlightSession: ObservableObject {
         }
         if ProcessInfo.processInfo.arguments.contains("--preview-settings") { settingsPresented = true }
         #endif
+        position = groundVisible ? targetPlanet.position : universe.position
     }
 
     var canLand: Bool {
@@ -173,7 +172,7 @@ final class FlightSession: ObservableObject {
         if let previous = lastTouch {
             // Relative drag: keep the finger still to stop turning, without lifting to accelerate.
             let scale = Float(max(240, min(size.width, size.height)))
-            steering += SIMD2(Float(point.x - previous.x), Float(point.y - previous.y)) / scale * 22
+            steering += SIMD2(Float(point.x - previous.x), Float(point.y - previous.y)) / scale * 14
             steering = simd_clamp(steering, SIMD2(repeating: -1), SIMD2(repeating: 1))
         }
         lastTouch = point
@@ -254,7 +253,7 @@ final class FlightSession: ObservableObject {
 
     private func pushAudioLevels(elapsed: Float = 0.15) {
         audio.setLevels(engine: engineVolume, signal: signalVolume, ambience: ambienceVolume,
-                        speed: velocity / 12, rest: restAmount, approach: approachAmount, elapsed: elapsed)
+                        speed: velocity / FlightTuning.cruiseSpeed, rest: restAmount, approach: approachAmount, elapsed: elapsed)
     }
 
     private func scheduleSave() {
@@ -272,7 +271,7 @@ final class FlightSession: ObservableObject {
             velocity: velocity, phase: phase.rawValue, target: targetPlanet.sector,
             transition: transitionProgress, approachSpeed: approachSpeed, touchdownPlayed: touchdownPlayed,
             settings: VoyageSettings(engine: engineVolume, signal: signalVolume, atmosphere: ambienceVolume,
-                backgroundSound: backgroundSound, gentleMotion: gentlerMotion), journal: log.snapshot)
+                backgroundSound: backgroundSound), journal: log.snapshot)
     }
 
     func save() {
@@ -293,39 +292,39 @@ final class FlightSession: ObservableObject {
         steering = .zero
         phase = phase == .landed ? .launching : .landing
         idle = 0
-        hudOpacity = 1
         save()
     }
 
     /// Called on the main thread by the display link; returns this frame's world displacement.
     func update(_ dt: Float, background: Bool = false) -> SIMD3<Float> {
         guard active || (background && backgroundAllowed && audio.isPlaying) else { return .zero }
+        let previouslyStopped = isProximityStopped
+        if phase != .flying && isProximityStopped { isProximityStopped = false }
         idle += dt
         if phase == .landed { log.rest(on: targetPlanet, seconds: Double(dt)) }
         var displacement = SIMD3<Float>.zero
         if phase == .flying {
-            let target: Float = (touching || accessibleSlow) ? 2 : 12
-            velocity += (target - velocity) * (1 - exp(-dt * (touching ? 1.7 : 0.38)))
-            let yaw = simd_quatf(angle: -steering.x * dt * 0.8, axis: [0, 1, 0])
-            let pitch = simd_quatf(angle: -steering.y * dt * 0.8, axis: [1, 0, 0])
+            let yaw = simd_quatf(angle: -steering.x * dt * 0.7, axis: [0, 1, 0])
+            let pitch = simd_quatf(angle: -steering.y * dt * 0.7, axis: [1, 0, 0])
             heading = simd_normalize(heading * yaw * pitch)
-            steering *= exp(-dt * (touching ? 5 : 2.5))
-            // Steering begins well outside the surface of any nearby body, including unselected ones.
-            if let obstacle = universe.planets.min(by: {
-                simd_length(universe.relative($0)) - $0.collisionRadius
-                    < simd_length(universe.relative($1)) - $1.collisionRadius
-            }) {
-                let center = universe.relative(obstacle)
-                if simd_length(center) < obstacle.collisionRadius + 49,
-                   simd_dot(forward, simd_normalize(center)) > 0.2 {
-                    let away = -simd_normalize(center)
-                    var tangent = simd_cross(away, heading.act([0, 1, 0]))
-                    if simd_length(tangent) < 0.01 { tangent = heading.act([1, 0, 0]) }
-                    let safe = simd_normalize(away * 0.7 + simd_normalize(tangent))
-                    let desired = simd_quatf(from: SIMD3<Float>(0, 0, -1), to: safe)
-                    heading = simd_slerp(heading, desired, 1 - exp(-dt * 0.7))
+            steering *= exp(-dt * (touching ? 6 : 4))
+            // Hold in front of any nearby world; the pilot alone decides when to turn away.
+            var nearestGap = Float.infinity
+            for body in universe.planets {
+                let center = universe.relative(body)
+                let distance = simd_length(center)
+                if distance > 0.001, simd_dot(forward, center / distance) > 0.2 {
+                    nearestGap = min(nearestGap, distance - body.collisionRadius)
                 }
             }
+            let cruise: Float = (touching || accessibleSlow) ? FlightTuning.slowSpeed : FlightTuning.cruiseSpeed
+            let limit = min(FlightTuning.cruiseSpeed, sqrt(2 * FlightTuning.brakingAcceleration * max(0, nearestGap - 45)))
+            let stopped = nearestGap <= 45.5
+            let target = min(cruise, limit)
+            let rate: Float = target < velocity ? 1.7 : 0.38
+            velocity += (target - velocity) * (1 - exp(-dt * rate))
+            if stopped { velocity = 0 }
+            if isProximityStopped != stopped { isProximityStopped = stopped }
             displacement = forward * velocity * dt
         } else if phase == .landing || phase == .launching {
             let landing = phase == .landing
@@ -370,6 +369,7 @@ final class FlightSession: ObservableObject {
         universe.advance(displacement)
         if phase == .flying { selectTarget() }
         log.travel(Double(simd_length(displacement)))
+        if previouslyStopped != isProximityStopped { save() }
         logClock += dt
         saveClock += dt
         if logClock >= 1 {
@@ -393,10 +393,10 @@ final class FlightSession: ObservableObject {
         uiClock += dt
         if uiClock > 0.1 {
             uiClock = 0
+            position = groundVisible ? targetPlanet.position : universe.position
             speed = velocity
             planetDistance = simd_length(planet)
             planetName = targetPlanet.name
-            hudOpacity = Double(0.22 + 0.78 * exp(-max(0, idle - 4) * 0.16))
         }
         return displacement
     }

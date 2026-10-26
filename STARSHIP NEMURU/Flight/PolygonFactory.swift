@@ -40,7 +40,8 @@ enum PolygonFactory {
             let wing: [SIMD3<Float>] = [[side * 0.5, 0, -0.6], [side * 2.2, -0.15, 1.8], [side * 0.65, 0.1, 1.4]]
             root.addChild(ModelEntity(mesh: try mesh([wing, wing.reversed().map { $0 }]), materials: [material(colors[1])]))
             let engine = ModelEntity(mesh: .generateBox(size: [0.32, 0.23, 0.12]),
-                                     materials: [material(UIColor(red: 0.46, green: 0.78, blue: 0.76, alpha: 1))])
+                                     materials: [material(UIColor(red: 0.012, green: 0.022, blue: 0.025, alpha: 1))])
+            engine.name = side < 0 ? "thruster.left" : "thruster.right"
             engine.position = [side * 0.53, 0.02, 1.52]
             root.addChild(engine)
         }
@@ -54,6 +55,7 @@ enum PolygonFactory {
     static func planet(_ definition: PlanetDefinition = .home) throws -> Entity {
         let root = Entity()
         var random = SeededRandom(seed: definition.seed)
+        let paletteColors = definition.colors
         let rows = 8 + Int(definition.seed % 5), columns = 14 + Int((definition.seed >> 4) % 7)
         func point(_ row: Int, _ col: Int) -> SIMD3<Float> {
             let latitude = Float(row) / Float(rows) * .pi
@@ -71,7 +73,7 @@ enum PolygonFactory {
             }
         }
         for (index, faces) in groups.enumerated() where !faces.isEmpty {
-            let color = definition.palette.low + (definition.palette.high - definition.palette.low) * Float(index) / 5
+            let color = paletteColors.low + (paletteColors.high - paletteColors.low) * Float(index) / 5
             root.addChild(ModelEntity(mesh: try mesh(faces), materials: [material(uiColor(color))]))
         }
         root.orientation = simd_quatf(angle: 0.3, axis: [0, 0, 1])
@@ -98,7 +100,7 @@ enum PolygonFactory {
             let size = random.range(0.3, 0.9)
             for face in faces { groups[index % 3].append(face.map { position + corners[$0] * size }) }
         }
-        let colors: [SIMD3<Float>] = [[0.38, 0.46, 0.47], [0.48, 0.43, 0.33], [0.25, 0.33, 0.40]]
+        let colors = StarColors.cluster(seed: definition.seed)
         for (index, triangles) in groups.enumerated() {
             root.addChild(ModelEntity(mesh: try mesh(triangles), materials: [material(uiColor(colors[index]))]))
         }
@@ -106,9 +108,52 @@ enum PolygonFactory {
         return root
     }
 
+    static func restingSky(seed: UInt64) throws -> Entity {
+        let root = Entity()
+        var random = SeededRandom(seed: seed ^ 0x534B59)
+        var groups = Array(repeating: [[SIMD3<Float>]](), count: StarColors.tints.count)
+        var colorRandom = SeededRandom(seed: seed ^ 0x53544152434F4C)
+        var trails = Array(repeating: [[SIMD3<Float>]](), count: 3)
+        let corners: [SIMD3<Float>] = [[1,0,0], [-1,0,0], [0,1,0], [0,-1,0], [0,0,1], [0,0,-1]]
+        let faces = [[0,2,4], [2,1,4], [1,3,4], [3,0,4], [2,0,5], [1,2,5], [3,1,5], [0,3,5]]
+        for index in 0..<1440 {
+            let y = random.range(-1, 1)
+            let angle = random.range(0, 2 * .pi)
+            let ring = sqrt(max(0, 1 - y * y))
+            let center = SIMD3(ring * cos(angle), y, ring * sin(angle)) * 350
+            let size = random.range(0.25, 0.7)
+            let colorIndex = StarColors.index(sample: colorRandom.value())
+            for face in faces { groups[colorIndex].append(face.map { center + corners[$0] * size }) }
+            // Short, fading arcs behind a sparse subset of stars reveal the sky's common orbit.
+            if index.isMultiple(of: 6) {
+                for step in 0..<9 {
+                    let a = simd_quatf(angle: -0.055 * Float(step) / 9, axis: RestingSkyMotion.axis).act(center)
+                    let b = simd_quatf(angle: -0.055 * Float(step + 1) / 9, axis: RestingSkyMotion.axis).act(center)
+                    let tangent = b - a
+                    guard simd_length(tangent) > 0.00001 else { continue }
+                    let side = simd_normalize(simd_cross(tangent, a)) * size * 0.65
+                    let first = [a - side, b - side, a + side]
+                    let second = [a + side, b - side, b + side]
+                    trails[step / 3] += [first, second, first.reversed().map { $0 }, second.reversed().map { $0 }]
+                }
+            }
+        }
+        let colors = StarColors.tints
+        for (index, triangles) in groups.enumerated() {
+            root.addChild(ModelEntity(mesh: try mesh(triangles), materials: [material(uiColor(colors[index]))]))
+        }
+        for (index, triangles) in trails.enumerated() {
+            let strength: Float = [0.48, 0.28, 0.14][index]
+            root.addChild(ModelEntity(mesh: try mesh(triangles),
+                materials: [material(uiColor(SIMD3<Float>(0.50, 0.60, 0.61) * strength))]))
+        }
+        return root
+    }
+
     static func terrain(_ definition: PlanetDefinition = .home) throws -> Entity {
         let root = Entity()
         var random = SeededRandom(seed: definition.seed &* 100)
+        let paletteColors = definition.colors
         let size = 18
         var heights = Array(repeating: Array(repeating: Float.zero, count: size + 1), count: size + 1)
         for x in 0...size {
@@ -129,7 +174,7 @@ enum PolygonFactory {
             }
         }
         for (i, faces) in groups.enumerated() {
-            let color = definition.palette.low * 0.65 + (definition.palette.high - definition.palette.low) * Float(i) / 4 * 0.4
+            let color = paletteColors.low * 0.65 + (paletteColors.high - paletteColors.low) * Float(i) / 4 * 0.4
             root.addChild(ModelEntity(mesh: try mesh(faces), materials: [material(uiColor(color))]))
         }
         return root

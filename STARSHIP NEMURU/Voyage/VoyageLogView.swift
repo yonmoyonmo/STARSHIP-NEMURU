@@ -131,7 +131,13 @@ private struct WorldRecordRow: View {
                 Text("Visits \(record.landings) · \(restDuration(record.stay)) resting")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
-        }.padding(.vertical, 5).accessibilityElement(children: .combine)
+            if record.landings > 0, let position = record.position {
+                DisclosureGroup("Galactic coordinates") {
+                    GalacticCoordinateReadings(position: position).padding(.vertical, 8)
+                    Text("Origin · C–18").font(.caption2).foregroundStyle(.secondary)
+                }.font(.caption).tint(.secondary)
+            }
+        }.padding(.vertical, 5).accessibilityElement(children: .contain)
     }
 }
 

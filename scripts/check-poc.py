@@ -6,6 +6,11 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 universe = (root / 'STARSHIP NEMURU/Flight/Universe.swift').read_text()
+tuning = (root / 'STARSHIP NEMURU/Flight/FlightTuning.swift').read_text()
+voyage_position = (root / 'STARSHIP NEMURU/Flight/VoyagePosition.swift').read_text()
+sky_motion = (root / 'STARSHIP NEMURU/Flight/RestingSkyMotion.swift').read_text()
+star_colors = (root / 'STARSHIP NEMURU/Flight/StarColors.swift').read_text()
+thruster_response = (root / 'STARSHIP NEMURU/Flight/ThrusterResponse.swift').read_text()
 store = (root / 'STARSHIP NEMURU/Voyage/VoyageStore.swift').read_text()
 log = (root / 'STARSHIP NEMURU/Voyage/VoyageLog.swift').read_text()
 flight = (root / 'STARSHIP NEMURU/Flight/FlightSession.swift').read_text()
@@ -27,14 +32,115 @@ checks = r'''
     @MainActor static func advance(_ session: FlightSession, _ seconds: Float, fps: Int = 60) {
         for _ in 0..<Int(seconds * Float(fps)) { _ = session.update(1 / Float(fps)) }
     }
+    @MainActor static func clearFlight() -> FlightSession {
+        for index: Int64 in 100...300 {
+            let world = Universe(position: UniversePosition(sector: SectorID(x: index, y: 0, z: 0)))
+            let clear = world.planets.allSatisfy { body in
+                let center = world.relative(body)
+                let along = min(800, max(0, -center.z))
+                return simd_length(center - SIMD3<Float>(0, 0, -along)) > body.collisionRadius + 125
+            }
+            if clear { return FlightSession(universe: world) }
+        }
+        preconditionFailure("No clear test corridor")
+    }
     @MainActor static func main() {
-        let flight = FlightSession()
+        var origin = UniversePosition()
+        origin.advance(PlanetDefinition.home.offset)
+        let homeAddress = VoyagePosition(origin)
+        precondition(homeAddress.x == 0 && homeAddress.y == 0 && homeAddress.z == 0)
+        let offsets: [SIMD3<Float>] = [[0,0,-1_000], [1_000,0,0], [0,0,1_000], [-1_000,0,0], [0,-1_000,0], [1_000,1_000,-1_000]]
+        for offset in offsets {
+            var point = origin
+            point.advance(offset)
+            let chart = VoyagePosition(point)
+            precondition(abs(chart.x - Double(offset.x) / 1_000) < 0.000001)
+            precondition(abs(chart.y - Double(offset.y) / 1_000) < 0.000001)
+            precondition(abs(chart.z - Double(offset.z) / 1_000) < 0.000001)
+        }
+        let farAddress = VoyagePosition(UniversePosition(sector: SectorID(x: 1_000_000_000_000, y: 0, z: 0)))
+        precondition(farAddress.distanceLightYears.isFinite && farAddress.x.isFinite)
+        var sky = RestingSkyMotion(seed: 18)
+        let initialSky = sky.angle
+        var visibleSky = sky
+        visibleSky.advance(5, reduceMotion: false)
+        let probe = SIMD3<Float>(0, 0, -350)
+        let initialProbe = sky.orientation.act(probe)
+        let movedProbe = visibleSky.orientation.act(probe)
+        precondition(simd_distance(initialProbe, movedProbe) > 5,
+                     "Five seconds must produce a perceptible change in a star away from the pole")
+        sky.advance(60, reduceMotion: true)
+        precondition(sky.angle == initialSky, "System Reduce Motion must freeze the resting sky")
+        sky.advance(60, reduceMotion: false)
+        precondition(abs(sky.angle - initialSky - 60 * RestingSkyMotion.radiansPerSecond) < 0.000001)
+        let restoredSky = RestingSkyMotion(seed: 18, elapsed: 60)
+        precondition(abs(restoredSky.angle - sky.angle) < 0.000001)
+        print("PASS galactic XYZ across sectors and far coordinates, quiet sky rotation/reduce-motion/restore")
+        for palette in PlanetPalette.allCases {
+            let first = palette.colors(seed: 18)
+            precondition(first == palette.colors(seed: 18), "World color must regenerate identically")
+            precondition(first != palette.colors(seed: 19), "The same family must permit per-world variation")
+            for axis in 0..<3 {
+                precondition(first.low[axis].isFinite && first.high[axis].isFinite)
+                precondition(first.low[axis] >= 0 && first.high[axis] <= 0.721 && first.low[axis] < first.high[axis])
+            }
+        }
+        var starCounts = Array(repeating: 0, count: StarColors.tints.count)
+        for value in 0..<1000 { starCounts[StarColors.index(sample: Float(value) / 1000)] += 1 }
+        precondition(starCounts.allSatisfy { $0 > 0 } && starCounts[2] > 300,
+                     "All six star colors must occur, with soft white the largest share")
+        for color in StarColors.tints { for axis in 0..<3 { precondition(color[axis] >= 0 && color[axis] <= 0.73) } }
+        precondition(StarColors.cluster(seed: 18) == StarColors.cluster(seed: 18))
+        precondition(StarColors.cluster(seed: 18) != StarColors.cluster(seed: 19))
+        print("PASS ten muted planet families, seeded color variation, six weighted star tints and cluster families")
+        var drive = ThrusterResponse()
+        for _ in 0..<120 { drive.update(speed: 24, acceleration: 0, braking: false, liftingOff: false, resting: false, dt: 1 / 60) }
+        let cruisingGlow = drive.brightness
+        precondition(cruisingGlow > 0.7 && cruisingGlow < 0.8)
+        for _ in 0..<120 { drive.update(speed: 24, acceleration: 8, braking: false, liftingOff: false, resting: false, dt: 1 / 60) }
+        precondition(drive.brightness > cruisingGlow && drive.brightness > 0.95)
+        for _ in 0..<60 { drive.update(speed: 24, acceleration: -8, braking: true, liftingOff: false, resting: false, dt: 1 / 60) }
+        precondition(drive.brightness < 0.13, "Braking must dim the drives before the ship has stopped")
+        for _ in 0..<120 { drive.update(speed: 0, acceleration: 0, braking: false, liftingOff: false, resting: true, dt: 1 / 60) }
+        precondition(drive.brightness == 0, "Stopped/resting drives must settle to dark")
+        for _ in 0..<120 { drive.update(speed: 0, acceleration: 0, braking: false, liftingOff: true, resting: false, dt: 1 / 60) }
+        precondition(drive.brightness > 0.8, "Launch must ignite before the ship leaves the ground")
+        var thirtyGlow = ThrusterResponse(), sixtyGlow = ThrusterResponse()
+        for _ in 0..<30 { thirtyGlow.update(speed: 12, acceleration: 4, braking: false, liftingOff: false, resting: false, dt: 1 / 30) }
+        for _ in 0..<60 { sixtyGlow.update(speed: 12, acceleration: 4, braking: false, liftingOff: false, resting: false, dt: 1 / 60) }
+        precondition(abs(thirtyGlow.brightness - sixtyGlow.brightness) < 0.00001)
+        print("PASS thruster acceleration/cruise/braking/stop/launch and frame-rate-independent smoothing")
+        let flight = clearFlight()
         flight.touch(at: .zero, size: CGSize(width: 400, height: 800))
         advance(flight, 8)
         precondition(abs(flight.velocity - 2) < 0.001, "Hold must decelerate to a positive minimum")
         flight.release()
-        advance(flight, 20)
-        precondition(abs(flight.velocity - 12) < 0.01, "Release must accelerate back to cruise")
+        advance(flight, 24)
+        precondition(abs(flight.velocity - 24) < 0.01, "Release must accelerate back to cruise")
+        let fastArchive = flight.makeArchive()
+        try! fastArchive.validate()
+        let fastRoundTrip = try! JSONDecoder().decode(VoyageArchive.self, from: JSONEncoder().encode(fastArchive))
+        precondition(fastRoundTrip.velocity > 23.9, "Doubled cruise speed must survive serialization")
+        var tooFast = fastArchive
+        tooFast.velocity = 25
+        do { try tooFast.validate(); preconditionFailure("Out-of-range speeds must still be rejected") } catch {}
+
+        let microTurn = FlightSession()
+        microTurn.touch(at: .zero, size: CGSize(width: 400, height: 800))
+        microTurn.touch(at: CGPoint(x: 5, y: 0), size: CGSize(width: 400, height: 800))
+        advance(microTurn, 1)
+        let smallAngle = atan2(microTurn.forward.x, -microTurn.forward.z)
+        precondition(smallAngle > 0.005 && smallAngle < 0.03, "A five-point drag must permit a small precise turn")
+        let releasedTurn = FlightSession()
+        releasedTurn.touch(at: .zero, size: CGSize(width: 400, height: 800))
+        releasedTurn.touch(at: CGPoint(x: 5, y: 0), size: CGSize(width: 400, height: 800))
+        releasedTurn.release()
+        advance(releasedTurn, 1)
+        let settledForward = releasedTurn.forward
+        advance(releasedTurn, 1)
+        let residual = acos(min(1, max(-1, simd_dot(settledForward, releasedTurn.forward))))
+        precondition(residual < 0.002, "Residual steering must settle promptly after release")
+        print("PASS 24-unit cruise/save, precise small drags and short release settling")
 
         let turn = FlightSession()
         turn.touch(at: .zero, size: CGSize(width: 400, height: 800))
@@ -67,9 +173,20 @@ checks = r'''
             precondition(voyage.planet.x.isFinite && voyage.heading.real.isFinite)
         }
         precondition(nearest >= 19 - 0.001, "Unattended flight must not enter the planet")
+        precondition(voyage.isProximityStopped && voyage.velocity == 0)
+        precondition(voyage.heading == simd_quatf(angle: 0, axis: [0,1,0]), "Approach must not turn the pilot automatically")
+        let heldPosition = voyage.universe.position
+        advance(voyage, 120)
+        precondition(voyage.universe.position == heldPosition, "A nearby planet must hold position without creeping")
+        for _ in 0..<300 {
+            voyage.accessibleTurn([1,0])
+            _ = voyage.update(1 / 60)
+        }
+        precondition(!voyage.isProximityStopped && voyage.velocity > 0, "Turning away must resume cruising")
+        print("PASS near-planet stop, no automatic turn, stable hold and pilot-controlled departure")
 
         let landing = FlightSession()
-        advance(landing, 10)
+        advance(landing, 6)
         precondition(landing.canLand, "The initial planet must be reachable")
         precondition(landing.approachAmount > 0, "Approaching a visible planet must affect its atmosphere")
         landing.landOrLaunch()
@@ -89,6 +206,7 @@ checks = r'''
         precondition(landing.velocity < 0.001, "Space movement must stop at the scene swap")
         advance(landing, 4)
         precondition(landing.phase == .landed && landing.groundVisible && landing.fade == 0)
+        precondition(landing.position == landing.targetPlanet.position, "The landed chart must agree with the visited world's location")
         precondition(landing.velocity == 0 && landing.groundShipHeight == -0.5)
         precondition(landing.restAmount == 1 && landing.audio.touchdownCount == 1)
         let visitedPlanet = landing.targetPlanet
@@ -99,10 +217,10 @@ checks = r'''
         advance(landing, 40)
         precondition(landing.audio.touchdownCount == 1, "Resting must not retrigger contact audio")
         precondition(landing.heading == restingHeading && !landing.touching, "Resting touch must not steer")
-        precondition(landing.hudOpacity < 0.3)
+        precondition(landing.controlsVisible, "Resting controls must remain available after inactivity")
         landing.touch(at: .zero, size: .zero)
         advance(landing, 1)
-        precondition(landing.hudOpacity > 0.9, "Resting touch must wake the departure controls")
+        precondition(landing.controlsVisible && landing.phase == .landed, "Resting touch must leave controls available without changing phase")
         precondition(landing.planet == resting, "Landing must be stationary")
         landing.landOrLaunch()
         advance(landing, 3)
@@ -150,7 +268,7 @@ checks = r'''
                 if first.cluster != nil { clusterCount += 1 }
             }
         }
-        precondition(paletteSet.count == 4 && radiusSet.count > 10 && clusterCount > 0)
+        precondition(paletteSet.count == PlanetPalette.allCases.count && radiusSet.count > 10 && clusterCount > 0)
         var boundary = UniversePosition()
         boundary.advance([-320.25, 320.25, -640.5])
         precondition(boundary.sector == SectorID(x: -1, y: 1, z: -1))
@@ -171,6 +289,7 @@ checks = r'''
         var sectorChanges = 0
         var previousSector = longVoyage.universe.position.sector
         for _ in 0..<72_000 {
+            if longVoyage.isProximityStopped { longVoyage.accessibleTurn([1, 0]) }
             _ = longVoyage.update(0.05)
             let world = longVoyage.universe
             precondition(world.sectors.count == Universe.maximumSectorCount)
@@ -213,18 +332,46 @@ checks = r'''
         persisted.engineVolume = 0.23
         persisted.signalVolume = 0.17
         persisted.backgroundSound = false
-        persisted.gentlerMotion = true
         persisted.save()
         voyageStore.flush()
         let savedPosition = persisted.universe.position
         let savedJournal = persisted.log.snapshot
+        precondition(savedJournal.worlds.first { $0.id == persisted.targetPlanet.sector }?.position == persisted.targetPlanet.position)
+        var oldArchive = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(persisted.makeArchive())) as! [String: Any]
+        var oldSettings = oldArchive["settings"] as! [String: Any]
+        oldSettings["gentleMotion"] = true
+        oldArchive["settings"] = oldSettings
+        var oldJournal = oldArchive["journal"] as! [String: Any]
+        oldJournal["worlds"] = (oldJournal["worlds"] as! [[String: Any]]).map { entry in
+            var legacy = entry
+            legacy.removeValue(forKey: "position")
+            return legacy
+        }
+        oldArchive["journal"] = oldJournal
+        let legacyArchive = try! JSONDecoder().decode(VoyageArchive.self, from: JSONSerialization.data(withJSONObject: oldArchive))
+        try! legacyArchive.validate()
+        let migratedLog = VoyageLog(legacyArchive.journal)
+        precondition(migratedLog.snapshot.worlds.allSatisfy { $0.position == Universe.generate($0.id).planet?.position })
+        precondition(migratedLog.visited == persisted.log.visited && migratedLog.distance == persisted.log.distance)
+        let holdRestoreDirectory = savedDirectory.appendingPathComponent("holding")
+        let holdStore = VoyageStore(directory: holdRestoreDirectory)
+        let holding = FlightSession(store: holdStore)
+        advance(holding, 60)
+        precondition(holding.isProximityStopped)
+        holding.save()
+        holdStore.flush()
+        let heldArchive = holding.universe.position
+        let holdRestored = FlightSession(store: VoyageStore(directory: holdRestoreDirectory))
+        advance(holdRestored, 30)
+        precondition(holdRestored.isProximityStopped && holdRestored.universe.position == heldArchive)
+        print("PASS planet center persistence, legacy journal location backfill, stopped-voyage restoration")
         let restored = FlightSession(store: VoyageStore(directory: savedDirectory))
         precondition(restored.phase == .landed && restored.groundVisible)
         precondition(restored.targetPlanet == persisted.targetPlanet)
         precondition(restored.universe.position == savedPosition)
         precondition(restored.log.snapshot == savedJournal, "Closed-app time must not fabricate a longer stay")
         precondition(restored.engineVolume == 0.23 && restored.signalVolume == 0.17)
-        precondition(!restored.backgroundSound && restored.gentlerMotion)
+        precondition(!restored.backgroundSound)
         advance(restored, 2)
         precondition(restored.log.visited == 1, "Resuming a stay must not count a second landing")
         restored.landOrLaunch()
@@ -351,7 +498,7 @@ checks = r'''
 with tempfile.TemporaryDirectory(prefix='nemuru-check-') as temporary:
     path = Path(temporary)
     source = path / 'Checks.swift'
-    source.write_text(universe + '\n' + store + '\n' + log + '\n' + flight + '\n' + voice + '\n' + checks)
+    source.write_text(tuning + '\n' + universe + '\n' + voyage_position + '\n' + sky_motion + '\n' + star_colors + '\n' + thruster_response + '\n' + store + '\n' + log + '\n' + flight + '\n' + voice + '\n' + checks)
     executable = path / 'checks'
     subprocess.run(['xcrun', '--sdk', 'macosx', 'swiftc', '-O', '-parse-as-library',
                     '-default-isolation', 'MainActor', '-module-cache-path', str(path / 'modules'), str(source), '-o', str(executable)], check=True)
